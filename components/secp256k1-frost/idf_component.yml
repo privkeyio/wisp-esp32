@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "secp256k1 with FROST/schnorrsig for ESP32"
+dependencies:
+  idf: ">=5.0"
