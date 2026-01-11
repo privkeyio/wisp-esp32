@@ -5,24 +5,6 @@
 
 static const char *TAG = "validator";
 
-static int count_leading_zero_bits(const uint8_t *data, size_t len)
-{
-    int bits = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (data[i] == 0) {
-            bits += 8;
-        } else {
-            uint8_t byte = data[i];
-            while ((byte & 0x80) == 0) {
-                bits++;
-                byte <<= 1;
-            }
-            break;
-        }
-    }
-    return bits;
-}
-
 static validation_result_t map_relay_error(nostr_relay_error_t err)
 {
     switch (err) {
@@ -73,7 +55,7 @@ validation_result_t validator_check_pow(const nostr_event *event, uint8_t min_di
         return VALIDATION_OK;
     }
 
-    int difficulty = count_leading_zero_bits(event->id, NOSTR_ID_SIZE);
+    int difficulty = nostr_nip13_calculate_difficulty(event->id);
     if (difficulty < min_difficulty) {
         ESP_LOGD(TAG, "Insufficient PoW: %d < %u", difficulty, min_difficulty);
         return VALIDATION_ERR_POW;
