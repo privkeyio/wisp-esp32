@@ -3,6 +3,7 @@
 #include "esp_timer.h"
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -49,21 +50,38 @@ static ws_connection_t* find_connection_by_fd(ws_server_t *server, int fd)
     return NULL;
 }
 
-ws_connection_t* ws_server_get_connection(ws_server_t *server, int fd)
+static void update_connection_activity(ws_server_t *server, int fd)
 {
     xSemaphoreTake(server->lock, portMAX_DELAY);
     ws_connection_t *conn = find_connection_by_fd(server, fd);
+    if (conn) {
+        conn->last_activity = esp_timer_get_time() / 1000000;
+    }
     xSemaphoreGive(server->lock);
-    return conn;
 }
 
 static void get_client_ip(int fd, char *ip_buf, size_t buf_len)
 {
-    struct sockaddr_in addr;
+    struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
-    if (getpeername(fd, (struct sockaddr *)&addr, &addr_len) == 0) {
-        inet_ntop(AF_INET, &addr.sin_addr, ip_buf, buf_len);
-    } else {
+    ip_buf[0] = '\0';
+
+    if (getpeername(fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+        strncpy(ip_buf, "unknown", buf_len - 1);
+        ip_buf[buf_len - 1] = '\0';
+        return;
+    }
+
+    const char *result = NULL;
+    if (addr.ss_family == AF_INET) {
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)&addr;
+        result = inet_ntop(AF_INET, &addr_in->sin_addr, ip_buf, buf_len);
+    } else if (addr.ss_family == AF_INET6) {
+        struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&addr;
+        result = inet_ntop(AF_INET6, &addr_in6->sin6_addr, ip_buf, buf_len);
+    }
+
+    if (!result) {
         strncpy(ip_buf, "unknown", buf_len - 1);
         ip_buf[buf_len - 1] = '\0';
     }
@@ -82,19 +100,24 @@ static esp_err_t on_open(httpd_handle_t hd, int sockfd)
     }
 
     ws_connection_t *conn = find_free_slot(g_server);
-    if (conn) {
-        conn->fd = sockfd;
-        conn->active = true;
-        conn->connected_at = esp_timer_get_time() / 1000000;
-        conn->last_activity = conn->connected_at;
-        get_client_ip(sockfd, conn->remote_ip, sizeof(conn->remote_ip));
-        conn->events_this_minute = 0;
-        conn->reqs_this_minute = 0;
-        conn->rate_window_start = conn->connected_at;
-        g_server->connection_count++;
-        ESP_LOGI(TAG, "New connection from %s (fd=%d, total=%d)",
-                 conn->remote_ip, sockfd, g_server->connection_count);
+    if (!conn) {
+        xSemaphoreGive(g_server->lock);
+        ESP_LOGE(TAG, "No free slot despite connection_count < WS_MAX_CONNECTIONS (fd=%d)", sockfd);
+        close(sockfd);
+        return ESP_FAIL;
     }
+
+    conn->fd = sockfd;
+    conn->active = true;
+    conn->connected_at = esp_timer_get_time() / 1000000;
+    conn->last_activity = conn->connected_at;
+    get_client_ip(sockfd, conn->remote_ip, sizeof(conn->remote_ip));
+    conn->events_this_minute = 0;
+    conn->reqs_this_minute = 0;
+    conn->rate_window_start = conn->connected_at;
+    g_server->connection_count++;
+    ESP_LOGI(TAG, "New connection from %s (fd=%d, total=%d)",
+             conn->remote_ip, sockfd, g_server->connection_count);
 
     xSemaphoreGive(g_server->lock);
     return ESP_OK;
@@ -150,13 +173,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
     }
 
     if (ws_pkt.len > WS_MAX_FRAME_SIZE) {
-        ESP_LOGW(TAG, "Frame too large: %d bytes", ws_pkt.len);
+        ESP_LOGW(TAG, "Frame too large: %zu bytes", ws_pkt.len);
         return ESP_FAIL;
     }
 
     ws_pkt.payload = malloc(ws_pkt.len + 1);
     if (!ws_pkt.payload) {
-        ESP_LOGE(TAG, "Failed to allocate %d bytes", ws_pkt.len);
+        ESP_LOGE(TAG, "Failed to allocate %zu bytes", ws_pkt.len);
         return ESP_ERR_NO_MEM;
     }
 
@@ -170,14 +193,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
     ((char *)ws_pkt.payload)[ws_pkt.len] = '\0';
 
     int fd = httpd_req_to_sockfd(req);
-    ws_connection_t *conn = ws_server_get_connection(g_server, fd);
-    if (conn) {
-        conn->last_activity = esp_timer_get_time() / 1000000;
+    if (g_server) {
+        update_connection_activity(g_server, fd);
     }
 
     switch (ws_pkt.type) {
         case HTTPD_WS_TYPE_TEXT:
-            ESP_LOGD(TAG, "Received %d bytes from fd=%d", ws_pkt.len, fd);
+            ESP_LOGD(TAG, "Received %zu bytes from fd=%d", ws_pkt.len, fd);
             if (g_message_callback) {
                 g_message_callback(fd, (char *)ws_pkt.payload, ws_pkt.len);
             }
@@ -185,10 +207,12 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
         case HTTPD_WS_TYPE_PING:
             ws_pkt.type = HTTPD_WS_TYPE_PONG;
-            httpd_ws_send_frame(req, &ws_pkt);
-            break;
-
-        case HTTPD_WS_TYPE_CLOSE:
+            ret = httpd_ws_send_frame(req, &ws_pkt);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to send PONG to fd=%d: %d", fd, ret);
+                free(ws_pkt.payload);
+                return ret;
+            }
             break;
 
         default:
@@ -227,6 +251,11 @@ static void ws_async_send(void *arg)
 
 esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_message)
 {
+    if (server->server != NULL) {
+        ESP_LOGE(TAG, "Server already initialized, call ws_server_stop first");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     memset(server, 0, sizeof(ws_server_t));
     server->lock = xSemaphoreCreateMutex();
     if (!server->lock) {
@@ -249,7 +278,10 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     esp_err_t ret = httpd_start(&server->server, &config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start server: %d", ret);
+        g_server = NULL;
+        g_message_callback = NULL;
         vSemaphoreDelete(server->lock);
+        server->lock = NULL;
         return ret;
     }
 
@@ -265,8 +297,12 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     ret = httpd_register_uri_handler(server->server, &ws_uri);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register WS handler: %d", ret);
+        g_server = NULL;
+        g_message_callback = NULL;
         httpd_stop(server->server);
+        server->server = NULL;
         vSemaphoreDelete(server->lock);
+        server->lock = NULL;
         return ret;
     }
 
@@ -276,6 +312,9 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
 
 void ws_server_stop(ws_server_t *server)
 {
+    g_server = NULL;
+    g_message_callback = NULL;
+
     if (server->server) {
         httpd_stop(server->server);
         server->server = NULL;
@@ -284,8 +323,13 @@ void ws_server_stop(ws_server_t *server)
         vSemaphoreDelete(server->lock);
         server->lock = NULL;
     }
-    g_server = NULL;
-    g_message_callback = NULL;
+    memset(server->connections, 0, sizeof(server->connections));
+    server->connection_count = 0;
+}
+
+bool ws_server_is_running(ws_server_t *server)
+{
+    return server && server->server != NULL;
 }
 
 esp_err_t ws_server_send(ws_server_t *server, int fd, const char *data, size_t len)
@@ -305,7 +349,12 @@ esp_err_t ws_server_send(ws_server_t *server, int fd, const char *data, size_t l
     memcpy(arg->data, data, len);
     arg->len = len;
 
-    return httpd_queue_work(server->server, ws_async_send, arg);
+    esp_err_t ret = httpd_queue_work(server->server, ws_async_send, arg);
+    if (ret != ESP_OK) {
+        free(arg->data);
+        free(arg);
+    }
+    return ret;
 }
 
 esp_err_t ws_server_broadcast(ws_server_t *server, const char *data, size_t len)
@@ -324,5 +373,13 @@ esp_err_t ws_server_broadcast(ws_server_t *server, const char *data, size_t len)
 
 void ws_server_close_connection(ws_server_t *server, int fd)
 {
+    if (!server) {
+        ESP_LOGW(TAG, "close_connection: NULL server pointer");
+        return;
+    }
+    if (!server->server) {
+        ESP_LOGW(TAG, "close_connection: server not initialized");
+        return;
+    }
     httpd_sess_trigger_close(server->server, fd);
 }
