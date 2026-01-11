@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Hardware tests for wisp-esp32 Nostr relay.
-Requires: pip install websockets
 
 Usage:
     RELAY_URL=ws://192.168.1.100:4869 python test_relay.py
@@ -11,7 +10,6 @@ import asyncio
 import json
 import os
 import sys
-import hashlib
 import time
 
 try:
@@ -28,7 +26,6 @@ failed = 0
 
 
 def make_event(content="test", kind=1):
-    """Create a minimal test event (invalid sig, for testing parsing)."""
     return {
         "id": "0" * 64,
         "pubkey": "0" * 64,
@@ -36,30 +33,26 @@ def make_event(content="test", kind=1):
         "kind": kind,
         "tags": [],
         "content": content,
-        "sig": "0" * 128
+        "sig": "0" * 128,
     }
 
 
 async def send_recv(ws, msg):
-    """Send message and receive response."""
     await ws.send(json.dumps(msg))
     return await asyncio.wait_for(ws.recv(), timeout=TIMEOUT)
 
 
 async def test_event_parsing():
-    """Test EVENT message is parsed and returns OK."""
     global passed, failed
     try:
         async with websockets.connect(RELAY_URL) as ws:
             event = make_event("test event")
-            msg = ["EVENT", event]
-            response = await send_recv(ws, msg)
+            response = await send_recv(ws, ["EVENT", event])
             data = json.loads(response)
 
             assert data[0] == "OK", f"Expected OK, got {data[0]}"
             assert data[1] == event["id"], "Event ID mismatch"
-            # Expect false due to invalid signature
-            assert data[2] == False, "Should reject invalid signature"
+            assert data[2] is False, "Should reject invalid signature"
             print("PASS: EVENT parsing and OK response")
             passed += 1
     except Exception as e:
@@ -68,12 +61,10 @@ async def test_event_parsing():
 
 
 async def test_req_parsing():
-    """Test REQ message is parsed and returns EOSE."""
     global passed, failed
     try:
         async with websockets.connect(RELAY_URL) as ws:
-            msg = ["REQ", "testsub", {"kinds": [1], "limit": 10}]
-            response = await send_recv(ws, msg)
+            response = await send_recv(ws, ["REQ", "testsub", {"kinds": [1], "limit": 10}])
             data = json.loads(response)
 
             assert data[0] == "EOSE", f"Expected EOSE, got {data[0]}"
@@ -86,12 +77,10 @@ async def test_req_parsing():
 
 
 async def test_close_parsing():
-    """Test CLOSE message is parsed and returns CLOSED."""
     global passed, failed
     try:
         async with websockets.connect(RELAY_URL) as ws:
-            msg = ["CLOSE", "testsub"]
-            response = await send_recv(ws, msg)
+            response = await send_recv(ws, ["CLOSE", "testsub"])
             data = json.loads(response)
 
             assert data[0] == "CLOSED", f"Expected CLOSED, got {data[0]}"
@@ -104,7 +93,6 @@ async def test_close_parsing():
 
 
 async def test_invalid_json():
-    """Test invalid JSON returns NOTICE."""
     global passed, failed
     try:
         async with websockets.connect(RELAY_URL) as ws:
@@ -121,12 +109,10 @@ async def test_invalid_json():
 
 
 async def test_unknown_message():
-    """Test unknown message type returns NOTICE."""
     global passed, failed
     try:
         async with websockets.connect(RELAY_URL) as ws:
-            msg = ["UNKNOWN", "data"]
-            response = await send_recv(ws, msg)
+            response = await send_recv(ws, ["UNKNOWN", "data"])
             data = json.loads(response)
 
             assert data[0] == "NOTICE", f"Expected NOTICE, got {data[0]}"
@@ -138,12 +124,10 @@ async def test_unknown_message():
 
 
 async def test_multiple_filters():
-    """Test REQ with multiple filters."""
     global passed, failed
     try:
         async with websockets.connect(RELAY_URL) as ws:
-            msg = ["REQ", "multi", {"kinds": [1]}, {"kinds": [0]}]
-            response = await send_recv(ws, msg)
+            response = await send_recv(ws, ["REQ", "multi", {"kinds": [1]}, {"kinds": [0]}])
             data = json.loads(response)
 
             assert data[0] == "EOSE", f"Expected EOSE, got {data[0]}"
@@ -156,7 +140,7 @@ async def test_multiple_filters():
 
 
 async def main():
-    print(f"=== Relay Hardware Tests ===")
+    print("=== Relay Hardware Tests ===")
     print(f"Relay: {RELAY_URL}")
     print()
 
@@ -168,7 +152,7 @@ async def main():
     await test_multiple_filters()
 
     print()
-    print(f"=== Results ===")
+    print("=== Results ===")
     print(f"Passed: {passed}")
     print(f"Failed: {failed}")
 
