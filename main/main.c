@@ -1,79 +1,74 @@
-#include <stdio.h>
-#include "esp_log.h"
-#include "nvs_flash.h"
-#include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+
+#include "nostr.h"
+#include "relay_core.h"
+#include "router.h"
 #include "ws_server.h"
 
 static const char *TAG = "wisp";
-static ws_server_t g_ws_server;
-
-static bool is_valid_utf8_text(const char *data, size_t len)
-{
-    for (size_t i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)data[i];
-        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
-            return false;
-        }
-        if (c >= 0x80) {
-            size_t seq_len = 0;
-            if ((c & 0xE0) == 0xC0) seq_len = 2;
-            else if ((c & 0xF0) == 0xE0) seq_len = 3;
-            else if ((c & 0xF8) == 0xF0) seq_len = 4;
-            else return false;
-            if (i + seq_len > len) return false;
-            for (size_t j = 1; j < seq_len; j++) {
-                if ((data[i + j] & 0xC0) != 0x80) return false;
-            }
-            i += seq_len - 1;
-        }
-    }
-    return true;
-}
+static relay_ctx_t g_relay_ctx;
 
 static void on_ws_message(int fd, const char *data, size_t len)
 {
-    const char *suffix = len > 128 ? "..." : "";
-    ESP_LOGI(TAG, "Message from fd=%d (%zu bytes): %.128s%s", fd, len, data, suffix);
-
     if (len == 0 || len > WS_MAX_FRAME_SIZE) {
-        ESP_LOGW(TAG, "Invalid message length from fd=%d: %zu", fd, len);
+        ESP_LOGW(TAG, "Invalid length fd=%d: %zu", fd, len);
         return;
     }
 
-    if (!is_valid_utf8_text(data, len)) {
-        ESP_LOGW(TAG, "Non-text/binary data from fd=%d, not echoing", fd);
+    router_msg_t msg;
+    nostr_relay_error_t result = router_parse(data, len, &msg);
+    if (result != NOSTR_RELAY_OK) {
+        router_send_notice(&g_relay_ctx, fd, "error: failed to parse message");
         return;
     }
 
-    esp_err_t ret = ws_server_send(&g_ws_server, fd, data, len);
+    router_dispatch(&g_relay_ctx, fd, &msg);
+    router_msg_free(&msg);
+}
+
+static void start_relay_server(ip_event_got_ip_t *event)
+{
+    if (ws_server_is_running(&g_relay_ctx.ws_server)) {
+        ESP_LOGI(TAG, "WebSocket server already running");
+        return;
+    }
+
+    g_relay_ctx.config.port = 4869;
+    g_relay_ctx.config.max_event_age_sec = 21 * 24 * 60 * 60;
+    g_relay_ctx.config.max_subs_per_conn = 8;
+    g_relay_ctx.config.max_filters_per_sub = 4;
+    g_relay_ctx.config.max_future_sec = 900;
+
+    esp_err_t ret = ws_server_init(&g_relay_ctx.ws_server, g_relay_ctx.config.port, on_ws_message);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send to fd=%d: %s (0x%x)", fd, esp_err_to_name(ret), ret);
+        ESP_LOGE(TAG, "Failed to init ws server: %s", esp_err_to_name(ret));
+        return;
     }
+
+    ESP_LOGI(TAG, "Relay listening on ws://" IPSTR ":%d",
+             IP2STR(&event->ip_info.ip), g_relay_ctx.config.port);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Disconnected, reconnecting...");
-        esp_wifi_connect();
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+    if (event_base == WIFI_EVENT) {
+        if (event_id == WIFI_EVENT_STA_START || event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+                ESP_LOGI(TAG, "Disconnected, reconnecting...");
+            }
+            esp_wifi_connect();
+        }
+        return;
+    }
+
+    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        if (ws_server_is_running(&g_ws_server)) {
-            ESP_LOGI(TAG, "WebSocket server already running");
-            return;
-        }
-        esp_err_t ret = ws_server_init(&g_ws_server, 4869, on_ws_message);
-        if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Relay listening on ws://" IPSTR ":4869",
-                     IP2STR(&event->ip_info.ip));
-        } else {
-            ESP_LOGE(TAG, "Failed to init ws server: %s (0x%x)", esp_err_to_name(ret), ret);
-        }
+        start_relay_server(event);
     }
 }
 
@@ -110,13 +105,14 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Wisp ESP32 Nostr Relay Starting...");
 
-    // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    nostr_init();
 
     wifi_init_sta();
 }

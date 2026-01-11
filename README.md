@@ -54,13 +54,33 @@ Your directory structure should look like:
 cd wisp-esp32
 source ~/path/to/esp-idf/export.sh
 idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
+idf.py -p /dev/ttyACM0 flash monitor
 ```
 
 ## Hardware
 
 - ESP32-S3 with 8MB Flash, 8MB PSRAM
 - Tested on ESP32-S3-DevKitC-1-N8R8
+
+## Testing
+
+### Hardware tests (requires device)
+
+```bash
+pip install websockets
+RELAY_URL=ws://<relay-ip>:4869 python test/hardware/test_relay.py
+```
+
+### Native tests (no device)
+
+```bash
+cd test/native
+mkdir -p ../../managed_components/espressif__cjson
+git clone https://github.com/DaveGamble/cJSON.git ../../managed_components/espressif__cjson/cJSON
+mkdir -p build && cd build
+cmake .. && make
+./test_router
+```
 
 ## License
 
