@@ -3,8 +3,16 @@
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "ws_server.h"
 
 static const char *TAG = "wisp";
+static ws_server_t g_ws_server;
+
+static void on_ws_message(int fd, const char *data, size_t len)
+{
+    ESP_LOGI(TAG, "Message from fd=%d: %.*s", fd, (int)len, data);
+    ws_server_send(&g_ws_server, fd, data, len);
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -17,7 +25,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        // TODO: Start WebSocket server here (Phase 2)
+        esp_err_t ret = ws_server_init(&g_ws_server, 4869, on_ws_message);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Relay listening on ws://" IPSTR ":4869",
+                     IP2STR(&event->ip_info.ip));
+        }
     }
 }
 

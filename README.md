@@ -21,10 +21,10 @@ Wisp-ESP32 brings the Nostr protocol to embedded hardware. An ephemeral relay wi
 
 ## Prerequisites
 
-**ESP-IDF v5.4+** (tested with v6.1)
+**ESP-IDF v5.3.4**
 
 ```bash
-git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git
+git clone -b v5.3.4 --recursive https://github.com/espressif/esp-idf.git
 cd esp-idf && ./install.sh esp32s3
 source export.sh
 ```
