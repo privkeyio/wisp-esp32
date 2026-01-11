@@ -6,7 +6,7 @@
 #include "router.h"
 #include "ws_server.h"
 
-static const char *TAG = "router";
+#define TAG "router"
 
 #define ROUTER_SEND_BUF_SIZE 512
 
@@ -133,7 +133,7 @@ esp_err_t router_send_closed(relay_ctx_t *ctx, int conn_fd, const char *sub_id,
 }
 
 extern int handle_event(relay_ctx_t *ctx, int conn_fd, nostr_event *event);
-extern int handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req);
+extern void handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req);
 extern int handle_close(relay_ctx_t *ctx, int conn_fd, const char *sub_id);
 
 static const char *get_event_rejection_message(nostr_relay_error_t err)
@@ -160,14 +160,12 @@ static const char *get_event_rejection_message(nostr_relay_error_t err)
 
 void router_dispatch(relay_ctx_t *ctx, int conn_fd, router_msg_t *msg)
 {
-    int result;
-
     switch (msg->type) {
         case ROUTER_MSG_EVENT: {
             nostr_event *event = msg->data.event;
             ESP_LOGD(TAG, "EVENT fd=%d kind=%d", conn_fd, event->kind);
 
-            result = handle_event(ctx, conn_fd, event);
+            int result = handle_event(ctx, conn_fd, event);
 
             char id_hex[65];
             nostr_event_get_id_hex(event, id_hex);
@@ -193,15 +191,7 @@ void router_dispatch(relay_ctx_t *ctx, int conn_fd, router_msg_t *msg)
                 break;
             }
 
-            result = handle_req(ctx, conn_fd, req);
-            if (result == NOSTR_RELAY_OK) {
-                break;
-            }
-
-            const char *reason = (result == NOSTR_RELAY_ERR_TOO_MANY_FILTERS)
-                ? "error: too many subscriptions"
-                : "error: subscription failed";
-            router_send_closed(ctx, conn_fd, req->sub_id, reason);
+            handle_req(ctx, conn_fd, req);
             break;
         }
 
@@ -209,7 +199,7 @@ void router_dispatch(relay_ctx_t *ctx, int conn_fd, router_msg_t *msg)
             const char *sub_id = msg->data.close.sub_id;
             ESP_LOGD(TAG, "CLOSE fd=%d sub=%s", conn_fd, sub_id);
 
-            result = handle_close(ctx, conn_fd, sub_id);
+            int result = handle_close(ctx, conn_fd, sub_id);
             if (result == NOSTR_RELAY_OK) {
                 router_send_closed(ctx, conn_fd, sub_id, "");
             }
