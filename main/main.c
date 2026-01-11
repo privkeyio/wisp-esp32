@@ -3,8 +3,54 @@
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "ws_server.h"
 
 static const char *TAG = "wisp";
+static ws_server_t g_ws_server;
+
+static bool is_valid_utf8_text(const char *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)data[i];
+        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
+            return false;
+        }
+        if (c >= 0x80) {
+            size_t seq_len = 0;
+            if ((c & 0xE0) == 0xC0) seq_len = 2;
+            else if ((c & 0xF0) == 0xE0) seq_len = 3;
+            else if ((c & 0xF8) == 0xF0) seq_len = 4;
+            else return false;
+            if (i + seq_len > len) return false;
+            for (size_t j = 1; j < seq_len; j++) {
+                if ((data[i + j] & 0xC0) != 0x80) return false;
+            }
+            i += seq_len - 1;
+        }
+    }
+    return true;
+}
+
+static void on_ws_message(int fd, const char *data, size_t len)
+{
+    const char *suffix = len > 128 ? "..." : "";
+    ESP_LOGI(TAG, "Message from fd=%d (%zu bytes): %.128s%s", fd, len, data, suffix);
+
+    if (len == 0 || len > WS_MAX_FRAME_SIZE) {
+        ESP_LOGW(TAG, "Invalid message length from fd=%d: %zu", fd, len);
+        return;
+    }
+
+    if (!is_valid_utf8_text(data, len)) {
+        ESP_LOGW(TAG, "Non-text/binary data from fd=%d, not echoing", fd);
+        return;
+    }
+
+    esp_err_t ret = ws_server_send(&g_ws_server, fd, data, len);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send to fd=%d: %s (0x%x)", fd, esp_err_to_name(ret), ret);
+    }
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -17,7 +63,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        // TODO: Start WebSocket server here (Phase 2)
+        if (ws_server_is_running(&g_ws_server)) {
+            ESP_LOGI(TAG, "WebSocket server already running");
+            return;
+        }
+        esp_err_t ret = ws_server_init(&g_ws_server, 4869, on_ws_message);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Relay listening on ws://" IPSTR ":4869",
+                     IP2STR(&event->ip_info.ip));
+        } else {
+            ESP_LOGE(TAG, "Failed to init ws server: %s (0x%x)", esp_err_to_name(ret), ret);
+        }
     }
 }
 
