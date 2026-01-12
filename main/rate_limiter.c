@@ -17,6 +17,15 @@ void rate_limiter_init(rate_limiter_t *rl, const rate_config_t *config)
     }
 }
 
+void rate_limiter_destroy(rate_limiter_t *rl)
+{
+    if (!rl) return;
+    if (rl->lock) {
+        vSemaphoreDelete(rl->lock);
+        rl->lock = NULL;
+    }
+}
+
 static rate_bucket_t* get_bucket(rate_limiter_t *rl, int fd)
 {
     for (int i = 0; i < RATE_LIMITER_MAX_BUCKETS; i++) {
