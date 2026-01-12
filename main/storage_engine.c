@@ -582,6 +582,26 @@ storage_error_t storage_delete_event(storage_engine_t *engine, const uint8_t eve
     return STORAGE_OK;
 }
 
+nostr_event *storage_get_event(storage_engine_t *engine, const uint8_t event_id[32])
+{
+    if (!engine->initialized) return NULL;
+
+    xSemaphoreTake(engine->lock, portMAX_DELAY);
+
+    storage_index_entry_t *entry = find_index_entry(engine, event_id);
+    if (!entry) {
+        xSemaphoreGive(engine->lock);
+        return NULL;
+    }
+
+    char path[128];
+    get_event_path(entry->event_id, entry->file_index, path, sizeof(path));
+    nostr_event *event = load_event_from_file(path);
+
+    xSemaphoreGive(engine->lock);
+    return event;
+}
+
 void storage_get_stats(storage_engine_t *engine, storage_stats_t *stats)
 {
     memset(stats, 0, sizeof(storage_stats_t));

@@ -73,6 +73,8 @@ void storage_free_query_results(nostr_event **results, uint16_t count);
 
 bool storage_event_exists(storage_engine_t *engine, const uint8_t event_id[32]);
 
+nostr_event *storage_get_event(storage_engine_t *engine, const uint8_t event_id[32]);
+
 storage_error_t storage_delete_event(storage_engine_t *engine, const uint8_t event_id[32]);
 
 int storage_purge_expired(storage_engine_t *engine);

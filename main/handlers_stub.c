@@ -1,4 +1,5 @@
 #include "broadcaster.h"
+#include "deletion.h"
 #include "relay_core.h"
 #include "router.h"
 #include "storage_engine.h"
@@ -22,6 +23,11 @@ int handle_event(relay_ctx_t *ctx, int conn_fd, nostr_event *event)
     if (result != VALIDATION_OK) {
         ESP_LOGW(TAG, "Validation failed: %s", validator_result_string(result));
         return validator_result_to_relay_error(result);
+    }
+
+    if (event->kind == NOSTR_KIND_DELETION && ctx->storage) {
+        int deleted = deletion_process(ctx->storage, event);
+        ESP_LOGI(TAG, "Deletion request processed: %d events deleted", deleted);
     }
 
     bool ephemeral = nostr_kind_is_ephemeral(event->kind);
