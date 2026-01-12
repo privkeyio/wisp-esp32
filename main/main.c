@@ -6,12 +6,14 @@
 #include "nostr.h"
 #include "relay_core.h"
 #include "router.h"
+#include "storage_engine.h"
 #include "sub_manager.h"
 #include "ws_server.h"
 
 static const char *TAG = "wisp";
 static relay_ctx_t g_relay_ctx;
 static sub_manager_t g_sub_manager;
+static storage_engine_t g_storage;
 
 static void on_ws_disconnect(int fd)
 {
@@ -55,9 +57,28 @@ static void start_relay_server(ip_event_got_ip_t *event)
     }
     g_relay_ctx.sub_manager = &g_sub_manager;
 
+    uint32_t default_ttl_sec = g_relay_ctx.config.max_event_age_sec;
+    if (storage_init(&g_storage, default_ttl_sec) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init storage engine");
+        sub_manager_destroy(&g_sub_manager);
+        g_relay_ctx.sub_manager = NULL;
+        return;
+    }
+    g_relay_ctx.storage = &g_storage;
+    if (storage_start_cleanup_task(&g_storage) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start storage cleanup task");
+        storage_destroy(&g_storage);
+        g_relay_ctx.storage = NULL;
+        sub_manager_destroy(&g_sub_manager);
+        g_relay_ctx.sub_manager = NULL;
+        return;
+    }
+
     esp_err_t ret = ws_server_init(&g_relay_ctx.ws_server, g_relay_ctx.config.port, on_ws_message);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init ws server: %s", esp_err_to_name(ret));
+        storage_destroy(&g_storage);
+        g_relay_ctx.storage = NULL;
         sub_manager_destroy(&g_sub_manager);
         g_relay_ctx.sub_manager = NULL;
         return;

@@ -641,9 +641,15 @@ static void storage_cleanup_task(void *arg)
     vTaskDelete(NULL);
 }
 
-void storage_start_cleanup_task(storage_engine_t *engine)
+esp_err_t storage_start_cleanup_task(storage_engine_t *engine)
 {
     engine->cleanup_stop = false;
-    xTaskCreate(storage_cleanup_task, "storage_cleanup", 4096,
-                engine, 2, &engine->cleanup_task);
+    BaseType_t ret = xTaskCreate(storage_cleanup_task, "storage_cleanup", 4096,
+                                 engine, 2, &engine->cleanup_task);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create cleanup task");
+        engine->cleanup_task = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }

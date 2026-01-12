@@ -81,6 +81,6 @@ int storage_compact_index(storage_engine_t *engine);
 
 void storage_get_stats(storage_engine_t *engine, storage_stats_t *stats);
 
-void storage_start_cleanup_task(storage_engine_t *engine);
+esp_err_t storage_start_cleanup_task(storage_engine_t *engine);
 
 #endif
