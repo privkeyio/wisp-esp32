@@ -1,6 +1,8 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_task_wdt.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 
 #include "nostr.h"
@@ -16,6 +18,48 @@ static relay_ctx_t g_relay_ctx;
 static sub_manager_t g_sub_manager;
 static storage_engine_t g_storage;
 static rate_limiter_t g_rate_limiter;
+
+#define MEM_MONITOR_INTERVAL_MS 60000
+#define MEM_MONITOR_STACK_SIZE  2048
+#define WATCHDOG_TIMEOUT_MS     30000
+
+static void memory_monitor_task(void *arg)
+{
+    (void)arg;
+
+    while (1) {
+        uint32_t free_heap = esp_get_free_heap_size();
+        uint32_t min_heap = esp_get_minimum_free_heap_size();
+        uint32_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+
+        ESP_LOGI(TAG, "Free heap: %lu, min: %lu, internal: %lu",
+                 (unsigned long)free_heap, (unsigned long)min_heap,
+                 (unsigned long)free_internal);
+
+        if (free_heap < 50000) {
+            ESP_LOGW(TAG, "Low memory warning: %lu bytes free", (unsigned long)free_heap);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(MEM_MONITOR_INTERVAL_MS));
+    }
+}
+
+static void init_watchdog(void)
+{
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = WATCHDOG_TIMEOUT_MS,
+        .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
+        .trigger_panic = true,
+    };
+    esp_err_t err = esp_task_wdt_init(&wdt_config);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Watchdog initialized (%d ms timeout)", WATCHDOG_TIMEOUT_MS);
+    } else if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGI(TAG, "Watchdog already initialized");
+    } else {
+        ESP_LOGW(TAG, "Failed to init watchdog: %s", esp_err_to_name(err));
+    }
+}
 
 static void on_ws_disconnect(int fd)
 {
@@ -41,6 +85,22 @@ static void on_ws_message(int fd, const char *data, size_t len)
     router_msg_free(&msg);
 }
 
+static void cleanup_relay_resources(bool cleanup_rate_limiter, bool cleanup_storage, bool cleanup_sub_manager)
+{
+    if (cleanup_rate_limiter && g_relay_ctx.rate_limiter) {
+        rate_limiter_destroy(&g_rate_limiter);
+        g_relay_ctx.rate_limiter = NULL;
+    }
+    if (cleanup_storage && g_relay_ctx.storage) {
+        storage_destroy(&g_storage);
+        g_relay_ctx.storage = NULL;
+    }
+    if (cleanup_sub_manager && g_relay_ctx.sub_manager) {
+        sub_manager_destroy(&g_sub_manager);
+        g_relay_ctx.sub_manager = NULL;
+    }
+}
+
 static void start_relay_server(ip_event_got_ip_t *event)
 {
     if (ws_server_is_running(&g_relay_ctx.ws_server)) {
@@ -63,17 +123,14 @@ static void start_relay_server(ip_event_got_ip_t *event)
     uint32_t default_ttl_sec = g_relay_ctx.config.max_event_age_sec;
     if (storage_init(&g_storage, default_ttl_sec) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init storage engine");
-        sub_manager_destroy(&g_sub_manager);
-        g_relay_ctx.sub_manager = NULL;
+        cleanup_relay_resources(false, false, true);
         return;
     }
     g_relay_ctx.storage = &g_storage;
+
     if (storage_start_cleanup_task(&g_storage) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start storage cleanup task");
-        storage_destroy(&g_storage);
-        g_relay_ctx.storage = NULL;
-        sub_manager_destroy(&g_sub_manager);
-        g_relay_ctx.sub_manager = NULL;
+        cleanup_relay_resources(false, true, true);
         return;
     }
 
@@ -87,10 +144,7 @@ static void start_relay_server(ip_event_got_ip_t *event)
     esp_err_t ret = ws_server_init(&g_relay_ctx.ws_server, g_relay_ctx.config.port, on_ws_message);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init ws server: %s", esp_err_to_name(ret));
-        storage_destroy(&g_storage);
-        g_relay_ctx.storage = NULL;
-        sub_manager_destroy(&g_sub_manager);
-        g_relay_ctx.sub_manager = NULL;
+        cleanup_relay_resources(true, true, true);
         return;
     }
     ws_server_set_disconnect_cb(on_ws_disconnect);
@@ -102,17 +156,12 @@ static void start_relay_server(ip_event_got_ip_t *event)
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT) {
-        if (event_id == WIFI_EVENT_STA_START || event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-                ESP_LOGI(TAG, "Disconnected, reconnecting...");
-            }
-            esp_wifi_connect();
-        }
-        return;
-    }
-
-    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Disconnected, reconnecting...");
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         start_relay_server(event);
@@ -159,7 +208,15 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    init_watchdog();
+
     nostr_init();
+
+    TaskHandle_t mem_mon_handle = NULL;
+    BaseType_t task_ret = xTaskCreate(memory_monitor_task, "mem_mon", MEM_MONITOR_STACK_SIZE, NULL, 1, &mem_mon_handle);
+    if (task_ret != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create mem_mon task (stack=%d)", MEM_MONITOR_STACK_SIZE);
+    }
 
     wifi_init_sta();
 }

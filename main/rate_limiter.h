@@ -33,6 +33,7 @@ typedef struct rate_limiter {
 } rate_limiter_t;
 
 void rate_limiter_init(rate_limiter_t *rl, const rate_config_t *config);
+void rate_limiter_destroy(rate_limiter_t *rl);
 bool rate_limiter_check(rate_limiter_t *rl, int fd, rate_type_t type);
 void rate_limiter_reset(rate_limiter_t *rl, int fd);
 
