@@ -13,3 +13,9 @@ add_executable(test_router
 target_include_directories(test_router PRIVATE ${CJSON_DIR})
 
 add_executable(test_sub_manager test_sub_manager.c)
+
+add_executable(test_broadcaster
+    test_broadcaster.c
+    ${CJSON_DIR}/cJSON.c
+)
+target_include_directories(test_broadcaster PRIVATE ${CJSON_DIR})

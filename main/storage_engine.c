@@ -447,7 +447,6 @@ storage_error_t storage_query_events(storage_engine_t *engine,
     *results = NULL;
     *count = 0;
 
-    if (limit == 0) limit = 100;
     if (limit > 500) limit = 500;
 
     nostr_event **events = calloc(limit, sizeof(nostr_event *));
