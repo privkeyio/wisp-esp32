@@ -2,9 +2,10 @@
 
 #include "relay_core.h"
 #include "router.h"
+#include "sub_manager.h"
 #include "validator.h"
 
-#define TAG "handlers"
+static const char *TAG = "handlers";
 
 int handle_event(relay_ctx_t *ctx, int conn_fd, nostr_event *event)
 {
@@ -28,11 +29,29 @@ int handle_event(relay_ctx_t *ctx, int conn_fd, nostr_event *event)
 void handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req)
 {
     ESP_LOGI(TAG, "REQ: sub=%s filters=%zu fd=%d", req->sub_id, req->filter_count, conn_fd);
+
+    if (!ctx->sub_manager) {
+        router_send_eose(ctx, conn_fd, req->sub_id);
+        return;
+    }
+
+    nostr_relay_error_t err = sub_manager_add(ctx->sub_manager, conn_fd,
+                                              req->sub_id, req->filters,
+                                              req->filter_count);
+    if (err != NOSTR_RELAY_OK) {
+        router_send_closed(ctx, conn_fd, req->sub_id, "error: too many subscriptions");
+        return;
+    }
+
     router_send_eose(ctx, conn_fd, req->sub_id);
 }
 
 int handle_close(relay_ctx_t *ctx, int conn_fd, const char *sub_id)
 {
     ESP_LOGI(TAG, "CLOSE: sub=%s fd=%d", sub_id, conn_fd);
+
+    if (ctx->sub_manager) {
+        return sub_manager_remove(ctx->sub_manager, conn_fd, sub_id);
+    }
     return NOSTR_RELAY_OK;
 }

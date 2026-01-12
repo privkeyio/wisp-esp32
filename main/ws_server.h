@@ -31,8 +31,10 @@ typedef struct {
 } ws_server_t;
 
 typedef void (*ws_message_cb_t)(int fd, const char *data, size_t len);
+typedef void (*ws_disconnect_cb_t)(int fd);
 
 esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_message);
+void ws_server_set_disconnect_cb(ws_disconnect_cb_t cb);
 void ws_server_stop(ws_server_t *server);
 bool ws_server_is_running(ws_server_t *server);
 esp_err_t ws_server_send(ws_server_t *server, int fd, const char *data, size_t len);
