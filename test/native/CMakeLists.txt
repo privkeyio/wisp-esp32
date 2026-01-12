@@ -11,3 +11,5 @@ add_executable(test_router
 )
 
 target_include_directories(test_router PRIVATE ${CJSON_DIR})
+
+add_executable(test_sub_manager test_sub_manager.c)

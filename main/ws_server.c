@@ -10,6 +10,7 @@
 
 static const char *TAG = "ws_server";
 static ws_message_cb_t g_message_callback = NULL;
+static ws_disconnect_cb_t g_disconnect_callback = NULL;
 static ws_server_t *g_server = NULL;
 
 static const char *NIP11_INFO =
@@ -127,6 +128,10 @@ static void on_close(httpd_handle_t hd, int sockfd)
 {
     if (!g_server) return;
 
+    if (g_disconnect_callback) {
+        g_disconnect_callback(sockfd);
+    }
+
     xSemaphoreTake(g_server->lock, portMAX_DELAY);
 
     ws_connection_t *conn = find_connection_by_fd(g_server, sockfd);
@@ -137,6 +142,11 @@ static void on_close(httpd_handle_t hd, int sockfd)
     }
 
     xSemaphoreGive(g_server->lock);
+}
+
+void ws_server_set_disconnect_cb(ws_disconnect_cb_t cb)
+{
+    g_disconnect_callback = cb;
 }
 
 static esp_err_t ws_handler(httpd_req_t *req)
@@ -314,6 +324,7 @@ void ws_server_stop(ws_server_t *server)
 {
     g_server = NULL;
     g_message_callback = NULL;
+    g_disconnect_callback = NULL;
 
     if (server->server) {
         httpd_stop(server->server);
@@ -373,12 +384,7 @@ esp_err_t ws_server_broadcast(ws_server_t *server, const char *data, size_t len)
 
 void ws_server_close_connection(ws_server_t *server, int fd)
 {
-    if (!server) {
-        ESP_LOGW(TAG, "close_connection: NULL server pointer");
-        return;
-    }
-    if (!server->server) {
-        ESP_LOGW(TAG, "close_connection: server not initialized");
+    if (!server || !server->server) {
         return;
     }
     httpd_sess_trigger_close(server->server, fd);

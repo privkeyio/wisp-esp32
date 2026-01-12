@@ -6,10 +6,17 @@
 #include "nostr.h"
 #include "relay_core.h"
 #include "router.h"
+#include "sub_manager.h"
 #include "ws_server.h"
 
 static const char *TAG = "wisp";
 static relay_ctx_t g_relay_ctx;
+static sub_manager_t g_sub_manager;
+
+static void on_ws_disconnect(int fd)
+{
+    sub_manager_remove_all(&g_sub_manager, fd);
+}
 
 static void on_ws_message(int fd, const char *data, size_t len)
 {
@@ -42,11 +49,20 @@ static void start_relay_server(ip_event_got_ip_t *event)
     g_relay_ctx.config.max_filters_per_sub = 4;
     g_relay_ctx.config.max_future_sec = 900;
 
+    if (sub_manager_init(&g_sub_manager) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init subscription manager");
+        return;
+    }
+    g_relay_ctx.sub_manager = &g_sub_manager;
+
     esp_err_t ret = ws_server_init(&g_relay_ctx.ws_server, g_relay_ctx.config.port, on_ws_message);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init ws server: %s", esp_err_to_name(ret));
+        sub_manager_destroy(&g_sub_manager);
+        g_relay_ctx.sub_manager = NULL;
         return;
     }
+    ws_server_set_disconnect_cb(on_ws_disconnect);
 
     ESP_LOGI(TAG, "Relay listening on ws://" IPSTR ":%d",
              IP2STR(&event->ip_info.ip), g_relay_ctx.config.port);
