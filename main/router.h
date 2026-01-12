@@ -56,4 +56,7 @@ esp_err_t router_send_eose(relay_ctx_t *ctx, int conn_fd, const char *sub_id);
 esp_err_t router_send_closed(relay_ctx_t *ctx, int conn_fd, const char *sub_id,
                              const char *message);
 
+esp_err_t router_send_event(relay_ctx_t *ctx, int conn_fd, const char *sub_id,
+                            const nostr_event *event);
+
 #endif

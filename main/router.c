@@ -6,7 +6,7 @@
 #include "router.h"
 #include "ws_server.h"
 
-#define TAG "router"
+static const char *TAG = "router";
 
 #define ROUTER_SEND_BUF_SIZE 512
 
@@ -132,6 +132,35 @@ esp_err_t router_send_closed(relay_ctx_t *ctx, int conn_fd, const char *sub_id,
     return send_relay_msg(ctx, conn_fd, &msg);
 }
 
+#define ROUTER_EVENT_BUF_SIZE 16384
+
+esp_err_t router_send_event(relay_ctx_t *ctx, int conn_fd, const char *sub_id,
+                            const nostr_event *event)
+{
+    nostr_relay_msg_t msg;
+    nostr_relay_msg_event(&msg, sub_id, event);
+
+    char *buf = malloc(ROUTER_EVENT_BUF_SIZE);
+    if (!buf) {
+        ESP_LOGE(TAG, "Failed to allocate event buffer");
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t out_len;
+    nostr_relay_error_t err = nostr_relay_msg_serialize(&msg, buf, ROUTER_EVENT_BUF_SIZE, &out_len);
+    if (err != NOSTR_RELAY_OK) {
+        ESP_LOGE(TAG, "Serialize event failed: %d", err);
+        free(buf);
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t send_err = ws_server_send(&ctx->ws_server, conn_fd, buf, out_len);
+    if (send_err != ESP_OK) {
+        ESP_LOGW(TAG, "Send event failed fd=%d: %d", conn_fd, send_err);
+    }
+    free(buf);
+    return send_err;
+}
+
 extern int handle_event(relay_ctx_t *ctx, int conn_fd, nostr_event *event);
 extern void handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req);
 extern int handle_close(relay_ctx_t *ctx, int conn_fd, const char *sub_id);
@@ -152,6 +181,9 @@ static const char *get_event_rejection_message(nostr_relay_error_t err)
 
         case NOSTR_RELAY_ERR_EXPIRED_EVENT:
             return NOSTR_OK_PREFIX_INVALID "event expired";
+
+        case NOSTR_RELAY_ERR_STORAGE:
+            return NOSTR_OK_PREFIX_ERROR "could not save event";
 
         default:
             return NOSTR_OK_PREFIX_ERROR "internal error";
