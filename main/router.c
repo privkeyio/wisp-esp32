@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 
+#include "rate_limiter.h"
 #include "relay_core.h"
 #include "router.h"
 #include "ws_server.h"
@@ -197,10 +198,16 @@ void router_dispatch(relay_ctx_t *ctx, int conn_fd, router_msg_t *msg)
             nostr_event *event = msg->data.event;
             ESP_LOGD(TAG, "EVENT fd=%d kind=%d", conn_fd, event->kind);
 
-            int result = handle_event(ctx, conn_fd, event);
-
             char id_hex[65];
             nostr_event_get_id_hex(event, id_hex);
+
+            if (ctx->rate_limiter &&
+                !rate_limiter_check(ctx->rate_limiter, conn_fd, RATE_TYPE_EVENT)) {
+                router_send_ok(ctx, conn_fd, id_hex, false, "rate-limited:");
+                break;
+            }
+
+            int result = handle_event(ctx, conn_fd, event);
 
             bool accepted = (result == NOSTR_RELAY_OK);
             const char *message = accepted ? "" : get_event_rejection_message(result);
@@ -211,6 +218,12 @@ void router_dispatch(relay_ctx_t *ctx, int conn_fd, router_msg_t *msg)
         case ROUTER_MSG_REQ: {
             router_req_t *req = &msg->data.req;
             ESP_LOGD(TAG, "REQ fd=%d sub=%s filters=%zu", conn_fd, req->sub_id, req->filter_count);
+
+            if (ctx->rate_limiter &&
+                !rate_limiter_check(ctx->rate_limiter, conn_fd, RATE_TYPE_REQ)) {
+                router_send_closed(ctx, conn_fd, req->sub_id, "rate-limited:");
+                break;
+            }
 
             size_t sub_len = strlen(req->sub_id);
             if (sub_len == 0 || sub_len > ROUTER_MAX_SUB_ID) {

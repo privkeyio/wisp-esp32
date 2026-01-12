@@ -1,4 +1,5 @@
 #include "ws_server.h"
+#include "nip11.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -12,24 +13,6 @@ static const char *TAG = "ws_server";
 static ws_message_cb_t g_message_callback = NULL;
 static ws_disconnect_cb_t g_disconnect_callback = NULL;
 static ws_server_t *g_server = NULL;
-
-static const char *NIP11_INFO =
-    "{"
-    "\"name\":\"ESP32 Ephemeral Relay\","
-    "\"description\":\"Minimal Nostr relay with 21-day TTL\","
-    "\"supported_nips\":[1,11,40],"
-    "\"software\":\"wisp-esp32\","
-    "\"version\":\"0.1.0\","
-    "\"limitation\":{"
-        "\"max_message_length\":65536,"
-        "\"max_subscriptions\":8,"
-        "\"max_filters\":4,"
-        "\"max_event_tags\":100,"
-        "\"auth_required\":false,"
-        "\"payment_required\":false"
-    "},"
-    "\"retention\":[{\"kinds\":[0,1,2,3,4,5,6,7],\"time\":1814400}]"
-    "}";
 
 static ws_connection_t* find_free_slot(ws_server_t *server)
 {
@@ -113,9 +96,6 @@ static esp_err_t on_open(httpd_handle_t hd, int sockfd)
     conn->connected_at = esp_timer_get_time() / 1000000;
     conn->last_activity = conn->connected_at;
     get_client_ip(sockfd, conn->remote_ip, sizeof(conn->remote_ip));
-    conn->events_this_minute = 0;
-    conn->reqs_this_minute = 0;
-    conn->rate_window_start = conn->connected_at;
     g_server->connection_count++;
     ESP_LOGI(TAG, "New connection from %s (fd=%d, total=%d)",
              conn->remote_ip, sockfd, g_server->connection_count);
@@ -155,14 +135,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
         char upgrade[16] = {0};
         if (httpd_req_get_hdr_value_str(req, "Upgrade", upgrade, sizeof(upgrade)) != ESP_OK ||
             strcasecmp(upgrade, "websocket") != 0) {
-            char accept[64] = {0};
-            if (httpd_req_get_hdr_value_str(req, "Accept", accept, sizeof(accept)) == ESP_OK &&
-                strstr(accept, "application/nostr+json")) {
-                httpd_resp_set_type(req, "application/nostr+json");
-            } else {
-                httpd_resp_set_type(req, "application/json");
-            }
-            return httpd_resp_send(req, NIP11_INFO, strlen(NIP11_INFO));
+            return nip11_handler(req);
         }
         ESP_LOGD(TAG, "WebSocket handshake completed");
         return ESP_OK;
@@ -314,6 +287,18 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
         vSemaphoreDelete(server->lock);
         server->lock = NULL;
         return ret;
+    }
+
+    httpd_uri_t options_uri = {
+        .uri = "/",
+        .method = HTTP_OPTIONS,
+        .handler = nip11_options_handler,
+        .user_ctx = NULL,
+    };
+
+    ret = httpd_register_uri_handler(server->server, &options_uri);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register OPTIONS handler: %d", ret);
     }
 
     ESP_LOGI(TAG, "WebSocket server started on port %d", port);
