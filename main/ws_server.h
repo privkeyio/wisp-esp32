@@ -18,9 +18,6 @@ typedef struct {
     uint32_t connected_at;
     uint32_t last_activity;
     char remote_ip[INET6_ADDRSTRLEN];
-    uint16_t events_this_minute;
-    uint16_t reqs_this_minute;
-    uint32_t rate_window_start;
 } ws_connection_t;
 
 typedef struct {

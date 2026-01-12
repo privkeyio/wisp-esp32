@@ -4,6 +4,7 @@
 #include "nvs_flash.h"
 
 #include "nostr.h"
+#include "rate_limiter.h"
 #include "relay_core.h"
 #include "router.h"
 #include "storage_engine.h"
@@ -14,10 +15,12 @@ static const char *TAG = "wisp";
 static relay_ctx_t g_relay_ctx;
 static sub_manager_t g_sub_manager;
 static storage_engine_t g_storage;
+static rate_limiter_t g_rate_limiter;
 
 static void on_ws_disconnect(int fd)
 {
     sub_manager_remove_all(&g_sub_manager, fd);
+    rate_limiter_reset(&g_rate_limiter, fd);
 }
 
 static void on_ws_message(int fd, const char *data, size_t len)
@@ -73,6 +76,13 @@ static void start_relay_server(ip_event_got_ip_t *event)
         g_relay_ctx.sub_manager = NULL;
         return;
     }
+
+    rate_config_t rate_cfg = {
+        .events_per_minute = 30,
+        .reqs_per_minute = 60,
+    };
+    rate_limiter_init(&g_rate_limiter, &rate_cfg);
+    g_relay_ctx.rate_limiter = &g_rate_limiter;
 
     esp_err_t ret = ws_server_init(&g_relay_ctx.ws_server, g_relay_ctx.config.port, on_ws_message);
     if (ret != ESP_OK) {
