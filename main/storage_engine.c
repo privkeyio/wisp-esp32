@@ -162,16 +162,17 @@ esp_err_t storage_init(storage_engine_t *engine, uint32_t default_ttl_sec)
         return ESP_ERR_NO_MEM;
     }
 
-    engine->index = heap_caps_calloc(STORAGE_INDEX_ENTRIES,
+    engine->max_index_entries = STORAGE_INDEX_ENTRIES;
+    engine->index = heap_caps_calloc(engine->max_index_entries,
                                      sizeof(storage_index_entry_t),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!engine->index) {
-        engine->index = calloc(STORAGE_INDEX_ENTRIES,
-                               sizeof(storage_index_entry_t));
-    }
-    if (!engine->index) {
-        vSemaphoreDelete(engine->lock);
-        return ESP_ERR_NO_MEM;
+        engine->max_index_entries = 1000;
+        engine->index = calloc(engine->max_index_entries, sizeof(storage_index_entry_t));
+        if (!engine->index) {
+            vSemaphoreDelete(engine->lock);
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     esp_vfs_littlefs_conf_t conf = {
@@ -250,7 +251,7 @@ storage_error_t storage_save_event(storage_engine_t *engine, const nostr_event *
         return STORAGE_ERR_DUPLICATE;
     }
 
-    if (engine->index_count >= STORAGE_INDEX_ENTRIES) {
+    if (engine->index_count >= engine->max_index_entries) {
         xSemaphoreGive(engine->lock);
         ESP_LOGW(TAG, "Storage full");
         return STORAGE_ERR_FULL;

@@ -3,6 +3,7 @@
 #include "esp_wifi.h"
 #include "esp_task_wdt.h"
 #include "esp_heap_caps.h"
+#include "esp_sntp.h"
 #include "nvs_flash.h"
 
 #include "nostr.h"
@@ -153,6 +154,24 @@ static void start_relay_server(ip_event_got_ip_t *event)
              IP2STR(&event->ip_info.ip), g_relay_ctx.config.port);
 }
 
+static void init_sntp(void)
+{
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
+
+    int retry = 0;
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < 15) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    if (retry < 15) {
+        ESP_LOGI(TAG, "NTP synced (epoch: %lu)", (unsigned long)time(NULL));
+    } else {
+        ESP_LOGW(TAG, "NTP sync timeout");
+    }
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -164,6 +183,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        init_sntp();
         start_relay_server(event);
     }
 }

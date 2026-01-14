@@ -49,6 +49,7 @@ typedef struct {
 typedef struct storage_engine {
     storage_index_entry_t *index;
     uint16_t index_count;
+    uint16_t max_index_entries;
     uint32_t next_file_index;
     SemaphoreHandle_t lock;
     TaskHandle_t cleanup_task;

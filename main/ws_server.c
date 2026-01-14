@@ -255,6 +255,7 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;
+    config.stack_size = 8192;
     config.open_fn = on_open;
     config.close_fn = on_close;
 

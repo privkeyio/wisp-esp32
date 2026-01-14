@@ -59,8 +59,8 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ## Hardware
 
-- ESP32-S3 with 8MB Flash, 8MB PSRAM
-- Tested on ESP32-S3-DevKitC-1-N8R8
+- ESP32-S3 with 8MB Flash (PSRAM optional, recommended)
+- Tested on M5Stack AtomS3 Lite, ESP32-S3-DevKitC-1-N8R8
 
 ## Testing
 
