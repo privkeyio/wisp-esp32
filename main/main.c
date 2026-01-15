@@ -154,22 +154,24 @@ static void start_relay_server(ip_event_got_ip_t *event)
              IP2STR(&event->ip_info.ip), g_relay_ctx.config.port);
 }
 
+static void sntp_sync_cb(struct timeval *tv)
+{
+    ESP_LOGI(TAG, "NTP synced (epoch: %lu)", (unsigned long)tv->tv_sec);
+}
+
 static void init_sntp(void)
 {
+    static bool sntp_initialized = false;
+
+    if (sntp_initialized) {
+        return;
+    }
+
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_set_time_sync_notification_cb(sntp_sync_cb);
     esp_sntp_init();
-
-    int retry = 0;
-    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < 15) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    if (retry < 15) {
-        ESP_LOGI(TAG, "NTP synced (epoch: %lu)", (unsigned long)time(NULL));
-    } else {
-        ESP_LOGW(TAG, "NTP sync timeout");
-    }
+    sntp_initialized = true;
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,

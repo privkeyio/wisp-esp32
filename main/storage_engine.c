@@ -118,6 +118,12 @@ static int load_index_from_nvs(storage_engine_t *engine)
         return STORAGE_ERR_IO;
     }
 
+    if (engine->index_count > engine->max_index_entries) {
+        ESP_LOGW(TAG, "Truncating index count from %" PRIu16 " to %" PRIu16,
+                 engine->index_count, engine->max_index_entries);
+        engine->index_count = engine->max_index_entries;
+    }
+
     err = nvs_get_u32(nvs, "next_idx", &engine->next_file_index);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get next_idx: %d", err);
