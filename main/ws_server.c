@@ -252,6 +252,7 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     config.server_port = port;
     config.ctrl_port = port + 1;
     config.max_open_sockets = WS_MAX_CONNECTIONS;
+    config.backlog_conn = WS_MAX_CONNECTIONS;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;

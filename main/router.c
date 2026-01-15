@@ -247,6 +247,8 @@ void router_dispatch(relay_ctx_t *ctx, int conn_fd, router_msg_t *msg)
             int result = handle_close(ctx, conn_fd, sub_id);
             if (result == NOSTR_RELAY_OK) {
                 router_send_closed(ctx, conn_fd, sub_id, "");
+            } else {
+                router_send_closed(ctx, conn_fd, sub_id, "no such subscription");
             }
             break;
         }
