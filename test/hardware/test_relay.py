@@ -396,12 +396,19 @@ async def test_ephemeral_events():
 
 
 async def test_stored_events_before_eose():
-    global passed, failed
+    global passed, failed, skipped
+
+    if not HAS_PYNOSTR:
+        print("SKIP: Stored events before EOSE (pynostr not installed)")
+        skipped += 1
+        return
+
     try:
-        unique_content = f"stored_test_{int(time.time())}"
         async with websockets.connect(RELAY_URL) as ws:
-            event = make_event(unique_content, kind=1)
-            response = await send_recv(ws, ["EVENT", event])
+            event = make_signed_event(f"stored_test_{int(time.time())}", kind=1)
+            await ws.send(json.dumps(["EVENT", event]))
+            ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=TIMEOUT))
+            assert ok[2] is True, f"Event rejected: {ok[3] if len(ok) > 3 else 'unknown'}"
 
         await asyncio.sleep(0.5)
 
@@ -416,10 +423,8 @@ async def test_stored_events_before_eose():
                 if data[0] == "EOSE":
                     break
 
-            event_msgs = [m for m in messages if m[0] == "EVENT"]
-            eose_msg = [m for m in messages if m[0] == "EOSE"]
-
-            assert len(eose_msg) == 1, "Should have exactly one EOSE"
+            event_count = sum(1 for m in messages if m[0] == "EVENT")
+            assert event_count > 0, "Should have at least one stored event"
             assert messages[-1][0] == "EOSE", "EOSE should be last message"
             print("PASS: Stored events sent before EOSE")
             passed += 1
