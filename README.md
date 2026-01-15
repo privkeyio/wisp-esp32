@@ -6,16 +6,59 @@ A minimal [Nostr](https://github.com/nostr-protocol/nostr) relay for ESP32-S3.
 
 ## Overview
 
-Wisp-ESP32 brings the Nostr protocol to embedded hardware. An ephemeral relay with 21-day TTL storage, designed for privacy-first local relay use cases.
+Wisp-ESP32 is an **ephemeral Nostr relay** that runs on $10 hardware. Your relay, your rules, your data—and it cleans up after itself.
 
-**Target specs:**
-- 5-10 concurrent WebSocket connections
-- Sub-100ms latency
-- 6MB flash storage (~6,000 events)
-- Schnorr signature verification via libnostr-c/noscrypt
+**Why run your own embedded relay?**
+
+- **Privacy**: Events never touch third-party infrastructure
+- **Sovereignty**: Works offline, no cloud dependency
+- **Ephemeral by design**: 21-day TTL means data automatically disappears
+- **Edge-ready**: Building block for mesh networks and air-gapped setups
+
+## Use Cases
+
+### Local Relay for FROST Signing Ceremonies
+
+Wisp pairs with [keep-esp32](https://github.com/privkeyio/keep-esp32) for private threshold signing coordination. Instead of leaking signing activity to public relays:
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Keep #1    │     │   Wisp      │     │  Keep #2    │
+│  (signer)   │◄───►│  (relay)    │◄───►│  (signer)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+                          ▲
+                          │
+                    ┌─────────────┐
+                    │ Coordinator │
+                    │    (CLI)    │
+                    └─────────────┘
+```
+
+- DKG ceremony events stay local
+- Signing coordination never hits public relays
+- 21-day TTL auto-purges ceremony artifacts
+
+### Family/Small Group Relay
+
+5-10 connections is perfect for a household or small community running their own infrastructure without a VPS.
+
+### Mesh Networking Node
+
+Unlike stateless mesh relays, Wisp provides ephemeral-but-persistent storage—nodes can query recent history while data still auto-expires.
+
+## Specs
+
+| Resource | Value |
+|----------|-------|
+| Connections | 5-10 concurrent WebSocket |
+| Latency | Sub-100ms |
+| Storage | 6MB flash (~6,000 events) |
+| TTL | 21 days (configurable) |
+| Crypto | Schnorr via libnostr-c/noscrypt |
 
 **Supported NIPs:**
 - NIP-01 (protocol)
+- NIP-09 (deletion)
 - NIP-11 (relay info)
 - NIP-40 (expiration)
 
