@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 
 static const char *TAG = "ws_server";
@@ -90,8 +91,14 @@ static esp_err_t on_open(httpd_handle_t hd, int sockfd)
     if (!conn) {
         xSemaphoreGive(g_server->lock);
         ESP_LOGE(TAG, "No free slot despite connection_count < WS_MAX_CONNECTIONS (fd=%d)", sockfd);
-        return ESP_FAIL;  // httpd will close the socket
+        return ESP_FAIL;
     }
+
+    struct linger so_linger = { .l_onoff = 1, .l_linger = 0 };
+    setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+
+    int nodelay = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
     conn->fd = sockfd;
     conn->active = true;
