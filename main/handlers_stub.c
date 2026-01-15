@@ -69,13 +69,10 @@ void handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req)
         uint16_t sent_count = 0;
 
         for (size_t i = 0; i < req->filter_count; i++) {
-            if (req->filters[i].limit == 0) {
-                continue;
-            }
-
             nostr_event **events = NULL;
             uint16_t event_count = 0;
-            uint16_t limit = req->filters[i].limit;
+            // Default to 100 if no limit specified (limit=0 means unlimited in NIP-01)
+            uint16_t limit = req->filters[i].limit > 0 ? req->filters[i].limit : 100;
 
             storage_error_t query_result = storage_query_events(ctx->storage,
                                                                  &req->filters[i],

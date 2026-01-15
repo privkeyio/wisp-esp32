@@ -6,3 +6,4 @@ sdkconfig.old
 *.pyc
 __pycache__/
 .cache/
+test/venv/
