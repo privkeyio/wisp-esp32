@@ -28,6 +28,13 @@ except ImportError:
 RELAY_URL = os.environ.get("RELAY_URL", "ws://localhost:4869")
 TIMEOUT = float(os.environ.get("TIMEOUT", "5"))
 CLOSE_TIMEOUT = 2  # WebSocket close timeout
+CONNECTION_DELAY = 1.0  # Delay between connections to avoid overwhelming relay
+
+# Time constants for TTL tests (in seconds)
+ONE_HOUR = 3600
+ONE_DAY = 24 * ONE_HOUR
+FUTURE_THRESHOLD = 16 * 60  # 16 minutes (relay rejects events >15 min in future)
+MAX_EVENT_AGE = 22 * ONE_DAY  # 22 days (relay rejects events >21 days old)
 
 passed = 0
 failed = 0
@@ -41,6 +48,10 @@ async def close_ws(ws):
     except asyncio.TimeoutError:
         pass
 
+
+def get_ok_error(ok_response):
+    """Extract error message from OK response, or empty string if none."""
+    return ok_response[3] if len(ok_response) > 3 else ""
 
 
 def make_event(content="test", kind=1):
@@ -56,13 +67,17 @@ def make_event(content="test", kind=1):
     }
 
 
-def make_signed_event(content="test", kind=1):
+def make_signed_event(content="test", kind=1, created_at=None, tags=None):
     """Create a properly signed Nostr event using pynostr."""
     if not HAS_PYNOSTR:
         return None
 
     privkey = PrivateKey()
     event = PynostrEvent(kind=kind, content=content)
+    if created_at is not None:
+        event.created_at = created_at
+    if tags:
+        event.tags = tags
     event.sign(privkey.hex())
 
     return event.to_dict()
@@ -226,9 +241,9 @@ async def test_multiple_connections():
     global passed, failed
     try:
         ws1 = await websockets.connect(RELAY_URL)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(CONNECTION_DELAY)
         ws2 = await websockets.connect(RELAY_URL)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(CONNECTION_DELAY)
         ws3 = await websockets.connect(RELAY_URL)
 
         # Use kinds that won't have stored events
@@ -247,6 +262,7 @@ async def test_multiple_connections():
         await close_ws(ws1)
         await close_ws(ws2)
         await close_ws(ws3)
+        await asyncio.sleep(CONNECTION_DELAY)  # Wait for server cleanup
 
         print("PASS: Multiple simultaneous connections")
         passed += 1
@@ -266,7 +282,7 @@ async def test_broadcaster_fanout():
 
     try:
         ws1 = await websockets.connect(RELAY_URL)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(CONNECTION_DELAY)
         ws2 = await websockets.connect(RELAY_URL)
 
         await ws1.send(json.dumps(["REQ", "sub1", {"kinds": [1]}]))
@@ -281,7 +297,7 @@ async def test_broadcaster_fanout():
         ok_resp = await asyncio.wait_for(ws2.recv(), timeout=TIMEOUT)
         ok_data = json.loads(ok_resp)
         assert ok_data[0] == "OK"
-        assert ok_data[2] is True, f"Event rejected: {ok_data[3] if len(ok_data) > 3 else 'unknown'}"
+        assert ok_data[2] is True, f"Event rejected: {get_ok_error(ok_data) or 'unknown'}"
 
         broadcast = await asyncio.wait_for(ws1.recv(), timeout=TIMEOUT)
         data = json.loads(broadcast)
@@ -292,6 +308,7 @@ async def test_broadcaster_fanout():
 
         await close_ws(ws1)
         await close_ws(ws2)
+        await asyncio.sleep(CONNECTION_DELAY)  # Wait for server cleanup
 
         print("PASS: Broadcaster fan-out")
         passed += 1
@@ -311,9 +328,9 @@ async def test_multiple_subscribers():
 
     try:
         ws1 = await websockets.connect(RELAY_URL)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(CONNECTION_DELAY)
         ws2 = await websockets.connect(RELAY_URL)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(CONNECTION_DELAY)
         ws3 = await websockets.connect(RELAY_URL)
 
         await ws1.send(json.dumps(["REQ", "client1", {"kinds": [1]}]))
@@ -331,7 +348,7 @@ async def test_multiple_subscribers():
         event = make_signed_event("multi subscriber test", kind=1)
         await ws3.send(json.dumps(["EVENT", event]))
         ok = json.loads(await asyncio.wait_for(ws3.recv(), timeout=TIMEOUT))
-        assert ok[2] is True, f"Event rejected: {ok[3] if len(ok) > 3 else 'unknown'}"
+        assert ok[2] is True, f"Event rejected: {get_ok_error(ok) or 'unknown'}"
 
         msg1 = json.loads(await asyncio.wait_for(ws1.recv(), timeout=TIMEOUT))
         msg2 = json.loads(await asyncio.wait_for(ws2.recv(), timeout=TIMEOUT))
@@ -343,6 +360,7 @@ async def test_multiple_subscribers():
         await close_ws(ws1)
         await close_ws(ws2)
         await close_ws(ws3)
+        await asyncio.sleep(CONNECTION_DELAY)  # Wait for server cleanup
 
         print("PASS: Multiple subscribers receive events")
         passed += 1
@@ -362,7 +380,7 @@ async def test_ephemeral_events():
 
     try:
         ws1 = await websockets.connect(RELAY_URL)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(CONNECTION_DELAY)
         ws2 = await websockets.connect(RELAY_URL)
 
         await ws1.send(json.dumps(["REQ", "ephsub", {"kinds": [20001]}]))
@@ -373,7 +391,7 @@ async def test_ephemeral_events():
         ok_resp = await asyncio.wait_for(ws2.recv(), timeout=TIMEOUT)
         ok = json.loads(ok_resp)
         assert ok[0] == "OK"
-        assert ok[2] is True, f"Event rejected: {ok[3] if len(ok) > 3 else 'unknown'}"
+        assert ok[2] is True, f"Event rejected: {get_ok_error(ok) or 'unknown'}"
 
         broadcast = await asyncio.wait_for(ws1.recv(), timeout=TIMEOUT)
         data = json.loads(broadcast)
@@ -381,7 +399,7 @@ async def test_ephemeral_events():
 
         await close_ws(ws1)
         await close_ws(ws2)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(CONNECTION_DELAY)  # Wait for server cleanup
 
         async with websockets.connect(RELAY_URL) as ws:
             await ws.send(json.dumps(["REQ", "check", {"kinds": [20001]}]))
@@ -408,7 +426,7 @@ async def test_stored_events_before_eose():
             event = make_signed_event(f"stored_test_{int(time.time())}", kind=1)
             await ws.send(json.dumps(["EVENT", event]))
             ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=TIMEOUT))
-            assert ok[2] is True, f"Event rejected: {ok[3] if len(ok) > 3 else 'unknown'}"
+            assert ok[2] is True, f"Event rejected: {get_ok_error(ok) or 'unknown'}"
 
         await asyncio.sleep(0.5)
 
@@ -430,6 +448,110 @@ async def test_stored_events_before_eose():
             passed += 1
     except Exception as e:
         print(f"FAIL: Stored events before EOSE - {e}")
+        failed += 1
+
+
+async def test_reject_future_event():
+    """Test that events >15 minutes in the future are rejected."""
+    global passed, failed, skipped
+
+    if not HAS_PYNOSTR:
+        print("SKIP: Reject future event (pynostr not installed)")
+        skipped += 1
+        return
+
+    try:
+        async with websockets.connect(RELAY_URL) as ws:
+            future_time = int(time.time()) + FUTURE_THRESHOLD
+            event = make_signed_event("future event", kind=1, created_at=future_time)
+            await ws.send(json.dumps(["EVENT", event]))
+            ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=TIMEOUT))
+            assert ok[0] == "OK"
+            assert ok[2] is False, "Future event should be rejected"
+            assert "future" in ok[3].lower(), f"Expected 'future' in error: {ok[3]}"
+            print("PASS: Future event rejected")
+            passed += 1
+    except Exception as e:
+        print(f"FAIL: Reject future event - {e}")
+        failed += 1
+
+
+async def test_reject_expired_nip40():
+    """Test that events with expired NIP-40 expiration tags are rejected."""
+    global passed, failed, skipped
+
+    if not HAS_PYNOSTR:
+        print("SKIP: Reject expired NIP-40 (pynostr not installed)")
+        skipped += 1
+        return
+
+    try:
+        async with websockets.connect(RELAY_URL) as ws:
+            past_time = int(time.time()) - ONE_HOUR
+            event = make_signed_event(
+                "expired event", kind=1,
+                tags=[["expiration", str(past_time)]]
+            )
+            await ws.send(json.dumps(["EVENT", event]))
+            ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=TIMEOUT))
+            assert ok[0] == "OK"
+            assert ok[2] is False, "Expired NIP-40 event should be rejected"
+            assert "expir" in ok[3].lower(), f"Expected 'expir' in error: {ok[3]}"
+            print("PASS: Expired NIP-40 event rejected")
+            passed += 1
+    except Exception as e:
+        print(f"FAIL: Reject expired NIP-40 - {e}")
+        failed += 1
+
+
+async def test_accept_valid_nip40():
+    """Test that events with valid NIP-40 expiration tags are accepted."""
+    global passed, failed, skipped
+
+    if not HAS_PYNOSTR:
+        print("SKIP: Accept valid NIP-40 (pynostr not installed)")
+        skipped += 1
+        return
+
+    try:
+        async with websockets.connect(RELAY_URL) as ws:
+            future_time = int(time.time()) + ONE_HOUR
+            event = make_signed_event(
+                "valid expiration event", kind=1,
+                tags=[["expiration", str(future_time)]]
+            )
+            await ws.send(json.dumps(["EVENT", event]))
+            ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=TIMEOUT))
+            assert ok[0] == "OK"
+            assert ok[2] is True, f"Valid NIP-40 event should be accepted: {get_ok_error(ok)}"
+            print("PASS: Valid NIP-40 event accepted")
+            passed += 1
+    except Exception as e:
+        print(f"FAIL: Accept valid NIP-40 - {e}")
+        failed += 1
+
+
+async def test_reject_old_event():
+    """Test that events older than 21 days are rejected."""
+    global passed, failed, skipped
+
+    if not HAS_PYNOSTR:
+        print("SKIP: Reject old event (pynostr not installed)")
+        skipped += 1
+        return
+
+    try:
+        async with websockets.connect(RELAY_URL) as ws:
+            old_time = int(time.time()) - MAX_EVENT_AGE
+            event = make_signed_event("old event", kind=1, created_at=old_time)
+            await ws.send(json.dumps(["EVENT", event]))
+            ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=TIMEOUT))
+            assert ok[0] == "OK"
+            assert ok[2] is False, "Old event should be rejected"
+            print("PASS: Old event (>21 days) rejected")
+            passed += 1
+    except Exception as e:
+        print(f"FAIL: Reject old event - {e}")
         failed += 1
 
 
@@ -462,10 +584,18 @@ async def main():
         test_stored_events_before_eose,
     ]
 
+    # Group 3: TTL and validation tests
+    tests_group3 = [
+        test_reject_future_event,
+        test_reject_expired_nip40,
+        test_accept_valid_nip40,
+        test_reject_old_event,
+    ]
+
     print("--- Group 1: Basic and Broadcaster Tests ---")
     for test in tests_group1:
         await test()
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(5.0)
 
     # Give relay time to recover between groups
     print("\n--- Waiting for relay to stabilize ---")
@@ -474,7 +604,15 @@ async def main():
     print("\n--- Group 2: Connection and Storage Tests ---")
     for test in tests_group2:
         await test()
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(5.0)
+
+    print("\n--- Waiting for relay to stabilize ---")
+    await asyncio.sleep(5.0)
+
+    print("\n--- Group 3: TTL and Validation Tests ---")
+    for test in tests_group3:
+        await test()
+        await asyncio.sleep(5.0)
 
     print()
     print("=== Results ===")
