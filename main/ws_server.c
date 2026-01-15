@@ -44,15 +44,19 @@ static void update_connection_activity(ws_server_t *server, int fd)
     xSemaphoreGive(server->lock);
 }
 
+static void set_unknown_ip(char *ip_buf, size_t buf_len)
+{
+    strncpy(ip_buf, "unknown", buf_len - 1);
+    ip_buf[buf_len - 1] = '\0';
+}
+
 static void get_client_ip(int fd, char *ip_buf, size_t buf_len)
 {
     struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
-    ip_buf[0] = '\0';
 
     if (getpeername(fd, (struct sockaddr *)&addr, &addr_len) != 0) {
-        strncpy(ip_buf, "unknown", buf_len - 1);
-        ip_buf[buf_len - 1] = '\0';
+        set_unknown_ip(ip_buf, buf_len);
         return;
     }
 
@@ -66,8 +70,7 @@ static void get_client_ip(int fd, char *ip_buf, size_t buf_len)
     }
 
     if (!result) {
-        strncpy(ip_buf, "unknown", buf_len - 1);
-        ip_buf[buf_len - 1] = '\0';
+        set_unknown_ip(ip_buf, buf_len);
     }
 }
 
@@ -87,8 +90,7 @@ static esp_err_t on_open(httpd_handle_t hd, int sockfd)
     if (!conn) {
         xSemaphoreGive(g_server->lock);
         ESP_LOGE(TAG, "No free slot despite connection_count < WS_MAX_CONNECTIONS (fd=%d)", sockfd);
-        close(sockfd);
-        return ESP_FAIL;
+        return ESP_FAIL;  // httpd will close the socket
     }
 
     conn->fd = sockfd;
@@ -198,6 +200,18 @@ static esp_err_t ws_handler(httpd_req_t *req)
             }
             break;
 
+        case HTTPD_WS_TYPE_CLOSE: {
+            ESP_LOGD(TAG, "Received CLOSE frame from fd=%d", fd);
+            free(ws_pkt.payload);
+            httpd_ws_frame_t close_pkt = {
+                .type = HTTPD_WS_TYPE_CLOSE,
+                .payload = NULL,
+                .len = 0,
+            };
+            httpd_ws_send_frame(req, &close_pkt);
+            return ESP_FAIL;
+        }
+
         default:
             break;
     }
@@ -232,6 +246,20 @@ static void ws_async_send(void *arg)
     free(a);
 }
 
+static void cleanup_server_init(ws_server_t *server, bool stop_httpd)
+{
+    g_server = NULL;
+    g_message_callback = NULL;
+    if (stop_httpd && server->server) {
+        httpd_stop(server->server);
+        server->server = NULL;
+    }
+    if (server->lock) {
+        vSemaphoreDelete(server->lock);
+        server->lock = NULL;
+    }
+}
+
 esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_message)
 {
     if (server->server != NULL) {
@@ -254,8 +282,12 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     config.max_open_sockets = WS_MAX_CONNECTIONS;
     config.backlog_conn = WS_MAX_CONNECTIONS;
     config.lru_purge_enable = true;
-    config.recv_wait_timeout = 10;
-    config.send_wait_timeout = 10;
+    config.recv_wait_timeout = 5;
+    config.send_wait_timeout = 5;
+    config.keep_alive_enable = true;
+    config.keep_alive_idle = 5;
+    config.keep_alive_interval = 1;
+    config.keep_alive_count = 3;
     config.stack_size = 8192;
     config.open_fn = on_open;
     config.close_fn = on_close;
@@ -263,10 +295,7 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     esp_err_t ret = httpd_start(&server->server, &config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start server: %d", ret);
-        g_server = NULL;
-        g_message_callback = NULL;
-        vSemaphoreDelete(server->lock);
-        server->lock = NULL;
+        cleanup_server_init(server, false);
         return ret;
     }
 
@@ -282,12 +311,7 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     ret = httpd_register_uri_handler(server->server, &ws_uri);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register WS handler: %d", ret);
-        g_server = NULL;
-        g_message_callback = NULL;
-        httpd_stop(server->server);
-        server->server = NULL;
-        vSemaphoreDelete(server->lock);
-        server->lock = NULL;
+        cleanup_server_init(server, true);
         return ret;
     }
 
