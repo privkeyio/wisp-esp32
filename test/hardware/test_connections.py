@@ -19,6 +19,8 @@ async def test_broadcaster_fanout():
         tc.skipped += 1
         return
 
+    ws1 = None
+    ws2 = None
     try:
         ws1 = await tc.websockets.connect(tc.RELAY_URL)
         await asyncio.sleep(tc.CONNECTION_DELAY)
@@ -39,14 +41,13 @@ async def test_broadcaster_fanout():
         assert broadcast[0] == "EVENT"
         assert broadcast[2]["content"] == "fanout test"
 
-        await tc.close_ws(ws1)
-        await tc.close_ws(ws2)
-        await asyncio.sleep(tc.CONNECTION_DELAY)
         print("PASS: Broadcaster fan-out")
         tc.passed += 1
     except Exception as e:
         print(f"FAIL: Broadcaster fan-out - {e}")
         tc.failed += 1
+    finally:
+        await tc.cleanup_websockets(ws1, ws2, delay=tc.CONNECTION_DELAY)
 
 
 async def test_multiple_subscribers():
@@ -55,6 +56,9 @@ async def test_multiple_subscribers():
         tc.skipped += 1
         return
 
+    ws1 = None
+    ws2 = None
+    ws3 = None
     try:
         ws1 = await tc.websockets.connect(tc.RELAY_URL)
         await asyncio.sleep(tc.CONNECTION_DELAY)
@@ -79,15 +83,13 @@ async def test_multiple_subscribers():
         msg2 = json.loads(await asyncio.wait_for(ws2.recv(), timeout=tc.TIMEOUT))
         assert msg1[0] == "EVENT" and msg2[0] == "EVENT"
 
-        await tc.close_ws(ws1)
-        await tc.close_ws(ws2)
-        await tc.close_ws(ws3)
-        await asyncio.sleep(tc.CONNECTION_DELAY)
         print("PASS: Multiple subscribers")
         tc.passed += 1
     except Exception as e:
         print(f"FAIL: Multiple subscribers - {e}")
         tc.failed += 1
+    finally:
+        await tc.cleanup_websockets(ws1, ws2, ws3, delay=tc.CONNECTION_DELAY)
 
 
 async def test_ephemeral_events():
@@ -96,6 +98,8 @@ async def test_ephemeral_events():
         tc.skipped += 1
         return
 
+    ws1 = None
+    ws2 = None
     try:
         ws1 = await tc.websockets.connect(tc.RELAY_URL)
         await asyncio.sleep(tc.CONNECTION_DELAY)
@@ -113,7 +117,9 @@ async def test_ephemeral_events():
         assert broadcast[0] == "EVENT"
 
         await tc.close_ws(ws1)
+        ws1 = None
         await tc.close_ws(ws2)
+        ws2 = None
         await asyncio.sleep(tc.CONNECTION_DELAY)
 
         async with tc.websockets.connect(tc.RELAY_URL) as ws:
@@ -125,6 +131,11 @@ async def test_ephemeral_events():
     except Exception as e:
         print(f"FAIL: Ephemeral events - {e}")
         tc.failed += 1
+    finally:
+        if ws1 is not None:
+            await tc.close_ws(ws1)
+        if ws2 is not None:
+            await tc.close_ws(ws2)
 
 
 async def test_stored_events():
@@ -134,12 +145,14 @@ async def test_stored_events():
         return
 
     TEST_KIND = 54321
+    ws = None
     try:
         ws = await tc.websockets.connect(tc.RELAY_URL)
         event = tc.make_signed_event(f"stored_{int(time.time())}", kind=TEST_KIND)
         await ws.send(json.dumps(["EVENT", event]))
         ok = json.loads(await asyncio.wait_for(ws.recv(), timeout=tc.TIMEOUT))
         await tc.close_ws(ws)
+        ws = None
         assert ok[2] is True
 
         await asyncio.sleep(tc.CONNECTION_DELAY)
@@ -153,6 +166,7 @@ async def test_stored_events():
             if msg[0] == "EOSE":
                 break
         await tc.close_ws(ws)
+        ws = None
 
         assert sum(1 for m in messages if m[0] == "EVENT") > 0
         assert messages[-1][0] == "EOSE"
@@ -161,9 +175,15 @@ async def test_stored_events():
     except Exception as e:
         print(f"FAIL: Stored events - {e}")
         tc.failed += 1
+    finally:
+        if ws is not None:
+            await tc.close_ws(ws)
 
 
 async def test_multiple_connections():
+    ws1 = None
+    ws2 = None
+    ws3 = None
     try:
         ws1 = await tc.websockets.connect(tc.RELAY_URL)
         await asyncio.sleep(tc.CONNECTION_DELAY)
@@ -182,14 +202,24 @@ async def test_multiple_connections():
         assert r1[0] == "EOSE" and r2[0] == "EOSE" and r3[0] == "EOSE"
 
         await tc.close_ws(ws1)
+        ws1 = None
         await tc.close_ws(ws2)
+        ws2 = None
         await tc.close_ws(ws3)
+        ws3 = None
         await asyncio.sleep(tc.CONNECTION_DELAY)
         print("PASS: Multiple connections")
         tc.passed += 1
     except Exception as e:
         print(f"FAIL: Multiple connections - {e}")
         tc.failed += 1
+    finally:
+        if ws1 is not None:
+            await tc.close_ws(ws1)
+        if ws2 is not None:
+            await tc.close_ws(ws2)
+        if ws3 is not None:
+            await tc.close_ws(ws3)
 
 
 async def test_sub_id_replacement():

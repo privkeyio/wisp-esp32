@@ -42,6 +42,24 @@ async def close_ws(ws):
         pass
 
 
+async def safe_close_ws(ws):
+    """Close a websocket connection, ignoring None and any errors."""
+    if ws is None:
+        return
+    try:
+        await close_ws(ws)
+    except Exception:
+        pass
+
+
+async def cleanup_websockets(*websockets, delay=0):
+    """Safely close multiple websocket connections with optional delay."""
+    for ws in websockets:
+        await safe_close_ws(ws)
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
 def get_ok_error(ok_response):
     return ok_response[3] if len(ok_response) > 3 else ""
 

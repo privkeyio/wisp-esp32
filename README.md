@@ -21,7 +21,7 @@ Wisp-ESP32 is an **ephemeral Nostr relay** that runs on $10 hardware. Your relay
 
 Wisp pairs with [keep-esp32](https://github.com/privkeyio/keep-esp32) for private threshold signing coordination. Instead of leaking signing activity to public relays:
 
-```
+```text
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  Keep #1    │     │   Wisp      │     │  Keep #2    │
 │  (signer)   │◄───►│  (relay)    │◄───►│  (signer)   │
@@ -51,9 +51,8 @@ Unlike stateless mesh relays, Wisp provides ephemeral-but-persistent storage—n
 | Resource | Value |
 |----------|-------|
 | Connections | 5-10 concurrent WebSocket |
-| Latency | Sub-100ms |
-| Storage | 6MB flash (~6,000 events) |
-| TTL | 21 days (configurable) |
+| Storage | 5,000 events |
+| TTL | 21 days |
 | Crypto | Schnorr via libnostr-c/noscrypt |
 
 **Supported NIPs:**
@@ -102,16 +101,28 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ## Hardware
 
-- ESP32-S3 with 8MB Flash (PSRAM optional, recommended)
-- Tested on M5Stack AtomS3 Lite, ESP32-S3-DevKitC-1-N8R8
+- ESP32-S3 with 8MB Flash
+- PSRAM optional (5000 event index with PSRAM, 1000 without)
+- Tested on M5Stack CoreS3 Lite, ESP32-S3-DevKitC-1-N8R8
+- AtomS3 Lite works but has limited PSRAM (reduced index capacity)
 
 ## Testing
 
 ### Hardware tests (requires device)
 
+Requires: `nak`, `websocat`, `curl`, `jq`
+
 ```bash
-pip install websockets
-RELAY_URL=ws://<relay-ip>:4869 python test/hardware/test_relay.py
+# Install tools
+go install github.com/fiatjaf/nak@latest  # or build from source
+cargo install websocat
+sudo apt install curl jq  # or brew install
+
+# Run integration tests
+RELAY=ws://<relay-ip>:4869 ./test/hardware/integration_test.sh
+
+# Run stress tests
+RELAY=ws://<relay-ip>:4869 ./test/hardware/stress_test.sh all
 ```
 
 ### Native tests (no device)

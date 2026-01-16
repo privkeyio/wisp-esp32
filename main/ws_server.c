@@ -14,6 +14,7 @@ static const char *TAG = "ws_server";
 static ws_message_cb_t g_message_callback = NULL;
 static ws_disconnect_cb_t g_disconnect_callback = NULL;
 static ws_server_t *g_server = NULL;
+static __thread httpd_req_t *g_current_req = NULL;
 
 static ws_connection_t* find_free_slot(ws_server_t *server)
 {
@@ -47,12 +48,19 @@ static void update_connection_activity(ws_server_t *server, int fd)
 
 static void set_unknown_ip(char *ip_buf, size_t buf_len)
 {
+    if (buf_len == 0) {
+        return;
+    }
     strncpy(ip_buf, "unknown", buf_len - 1);
     ip_buf[buf_len - 1] = '\0';
 }
 
 static void get_client_ip(int fd, char *ip_buf, size_t buf_len)
 {
+    if (buf_len == 0) {
+        return;
+    }
+
     struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
 
@@ -193,7 +201,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
         case HTTPD_WS_TYPE_TEXT:
             ESP_LOGD(TAG, "Received %zu bytes from fd=%d", ws_pkt.len, fd);
             if (g_message_callback) {
+                g_current_req = req;
                 g_message_callback(fd, (char *)ws_pkt.payload, ws_pkt.len);
+                g_current_req = NULL;
             }
             break;
 
@@ -289,13 +299,13 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     config.max_open_sockets = WS_MAX_CONNECTIONS;
     config.backlog_conn = WS_MAX_CONNECTIONS;
     config.lru_purge_enable = true;
-    config.recv_wait_timeout = 5;
-    config.send_wait_timeout = 5;
+    config.recv_wait_timeout = 3;
+    config.send_wait_timeout = 3;
     config.keep_alive_enable = true;
     config.keep_alive_idle = 5;
     config.keep_alive_interval = 1;
     config.keep_alive_count = 3;
-    config.stack_size = 8192;
+    config.stack_size = 12288;
     config.open_fn = on_open;
     config.close_fn = on_close;
 
@@ -365,25 +375,36 @@ esp_err_t ws_server_send(ws_server_t *server, int fd, const char *data, size_t l
 {
     if (!server->server) return ESP_ERR_INVALID_STATE;
 
+    if (g_current_req && httpd_req_to_sockfd(g_current_req) == fd) {
+        httpd_ws_frame_t ws_pkt = {
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)data,
+            .len = len,
+        };
+        return httpd_ws_send_frame(g_current_req, &ws_pkt);
+    }
+
     async_send_arg_t *arg = malloc(sizeof(async_send_arg_t));
     if (!arg) return ESP_ERR_NO_MEM;
 
-    arg->hd = server->server;
-    arg->fd = fd;
     arg->data = malloc(len);
     if (!arg->data) {
         free(arg);
         return ESP_ERR_NO_MEM;
     }
+
     memcpy(arg->data, data, len);
+    arg->hd = server->server;
+    arg->fd = fd;
     arg->len = len;
 
     esp_err_t ret = httpd_queue_work(server->server, ws_async_send, arg);
     if (ret != ESP_OK) {
         free(arg->data);
         free(arg);
+        return ret;
     }
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t ws_server_broadcast(ws_server_t *server, const char *data, size_t len)
