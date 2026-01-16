@@ -7,12 +7,14 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 
 static const char *TAG = "ws_server";
 static ws_message_cb_t g_message_callback = NULL;
 static ws_disconnect_cb_t g_disconnect_callback = NULL;
 static ws_server_t *g_server = NULL;
+static __thread httpd_req_t *g_current_req = NULL;
 
 static ws_connection_t* find_free_slot(ws_server_t *server)
 {
@@ -44,15 +46,26 @@ static void update_connection_activity(ws_server_t *server, int fd)
     xSemaphoreGive(server->lock);
 }
 
+static void set_unknown_ip(char *ip_buf, size_t buf_len)
+{
+    if (buf_len == 0) {
+        return;
+    }
+    strncpy(ip_buf, "unknown", buf_len - 1);
+    ip_buf[buf_len - 1] = '\0';
+}
+
 static void get_client_ip(int fd, char *ip_buf, size_t buf_len)
 {
+    if (buf_len == 0) {
+        return;
+    }
+
     struct sockaddr_storage addr;
     socklen_t addr_len = sizeof(addr);
-    ip_buf[0] = '\0';
 
     if (getpeername(fd, (struct sockaddr *)&addr, &addr_len) != 0) {
-        strncpy(ip_buf, "unknown", buf_len - 1);
-        ip_buf[buf_len - 1] = '\0';
+        set_unknown_ip(ip_buf, buf_len);
         return;
     }
 
@@ -66,8 +79,7 @@ static void get_client_ip(int fd, char *ip_buf, size_t buf_len)
     }
 
     if (!result) {
-        strncpy(ip_buf, "unknown", buf_len - 1);
-        ip_buf[buf_len - 1] = '\0';
+        set_unknown_ip(ip_buf, buf_len);
     }
 }
 
@@ -87,9 +99,14 @@ static esp_err_t on_open(httpd_handle_t hd, int sockfd)
     if (!conn) {
         xSemaphoreGive(g_server->lock);
         ESP_LOGE(TAG, "No free slot despite connection_count < WS_MAX_CONNECTIONS (fd=%d)", sockfd);
-        close(sockfd);
         return ESP_FAIL;
     }
+
+    struct linger so_linger = { .l_onoff = 1, .l_linger = 0 };
+    setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+
+    int nodelay = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
     conn->fd = sockfd;
     conn->active = true;
@@ -184,7 +201,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
         case HTTPD_WS_TYPE_TEXT:
             ESP_LOGD(TAG, "Received %zu bytes from fd=%d", ws_pkt.len, fd);
             if (g_message_callback) {
+                g_current_req = req;
                 g_message_callback(fd, (char *)ws_pkt.payload, ws_pkt.len);
+                g_current_req = NULL;
             }
             break;
 
@@ -197,6 +216,18 @@ static esp_err_t ws_handler(httpd_req_t *req)
                 return ret;
             }
             break;
+
+        case HTTPD_WS_TYPE_CLOSE: {
+            ESP_LOGD(TAG, "Received CLOSE frame from fd=%d", fd);
+            free(ws_pkt.payload);
+            httpd_ws_frame_t close_pkt = {
+                .type = HTTPD_WS_TYPE_CLOSE,
+                .payload = NULL,
+                .len = 0,
+            };
+            httpd_ws_send_frame(req, &close_pkt);
+            return ESP_FAIL;
+        }
 
         default:
             break;
@@ -232,6 +263,20 @@ static void ws_async_send(void *arg)
     free(a);
 }
 
+static void cleanup_server_init(ws_server_t *server, bool stop_httpd)
+{
+    g_server = NULL;
+    g_message_callback = NULL;
+    if (stop_httpd && server->server) {
+        httpd_stop(server->server);
+        server->server = NULL;
+    }
+    if (server->lock) {
+        vSemaphoreDelete(server->lock);
+        server->lock = NULL;
+    }
+}
+
 esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_message)
 {
     if (server->server != NULL) {
@@ -252,19 +297,22 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     config.server_port = port;
     config.ctrl_port = port + 1;
     config.max_open_sockets = WS_MAX_CONNECTIONS;
+    config.backlog_conn = WS_MAX_CONNECTIONS;
     config.lru_purge_enable = true;
-    config.recv_wait_timeout = 10;
-    config.send_wait_timeout = 10;
+    config.recv_wait_timeout = 3;
+    config.send_wait_timeout = 3;
+    config.keep_alive_enable = true;
+    config.keep_alive_idle = 5;
+    config.keep_alive_interval = 1;
+    config.keep_alive_count = 3;
+    config.stack_size = 12288;
     config.open_fn = on_open;
     config.close_fn = on_close;
 
     esp_err_t ret = httpd_start(&server->server, &config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start server: %d", ret);
-        g_server = NULL;
-        g_message_callback = NULL;
-        vSemaphoreDelete(server->lock);
-        server->lock = NULL;
+        cleanup_server_init(server, false);
         return ret;
     }
 
@@ -280,12 +328,7 @@ esp_err_t ws_server_init(ws_server_t *server, uint16_t port, ws_message_cb_t on_
     ret = httpd_register_uri_handler(server->server, &ws_uri);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register WS handler: %d", ret);
-        g_server = NULL;
-        g_message_callback = NULL;
-        httpd_stop(server->server);
-        server->server = NULL;
-        vSemaphoreDelete(server->lock);
-        server->lock = NULL;
+        cleanup_server_init(server, true);
         return ret;
     }
 
@@ -332,25 +375,36 @@ esp_err_t ws_server_send(ws_server_t *server, int fd, const char *data, size_t l
 {
     if (!server->server) return ESP_ERR_INVALID_STATE;
 
+    if (g_current_req && httpd_req_to_sockfd(g_current_req) == fd) {
+        httpd_ws_frame_t ws_pkt = {
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)data,
+            .len = len,
+        };
+        return httpd_ws_send_frame(g_current_req, &ws_pkt);
+    }
+
     async_send_arg_t *arg = malloc(sizeof(async_send_arg_t));
     if (!arg) return ESP_ERR_NO_MEM;
 
-    arg->hd = server->server;
-    arg->fd = fd;
     arg->data = malloc(len);
     if (!arg->data) {
         free(arg);
         return ESP_ERR_NO_MEM;
     }
+
     memcpy(arg->data, data, len);
+    arg->hd = server->server;
+    arg->fd = fd;
     arg->len = len;
 
     esp_err_t ret = httpd_queue_work(server->server, ws_async_send, arg);
     if (ret != ESP_OK) {
         free(arg->data);
         free(arg);
+        return ret;
     }
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t ws_server_broadcast(ws_server_t *server, const char *data, size_t len)

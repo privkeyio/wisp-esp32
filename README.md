@@ -6,16 +6,58 @@ A minimal [Nostr](https://github.com/nostr-protocol/nostr) relay for ESP32-S3.
 
 ## Overview
 
-Wisp-ESP32 brings the Nostr protocol to embedded hardware. An ephemeral relay with 21-day TTL storage, designed for privacy-first local relay use cases.
+Wisp-ESP32 is an **ephemeral Nostr relay** that runs on $10 hardware. Your relay, your rules, your data—and it cleans up after itself.
 
-**Target specs:**
-- 5-10 concurrent WebSocket connections
-- Sub-100ms latency
-- 6MB flash storage (~6,000 events)
-- Schnorr signature verification via libnostr-c/noscrypt
+**Why run your own embedded relay?**
+
+- **Privacy**: Events never touch third-party infrastructure
+- **Sovereignty**: Works offline, no cloud dependency
+- **Ephemeral by design**: 21-day TTL means data automatically disappears
+- **Edge-ready**: Building block for mesh networks and air-gapped setups
+
+## Use Cases
+
+### Local Relay for FROST Signing Ceremonies
+
+Wisp pairs with [keep-esp32](https://github.com/privkeyio/keep-esp32) for private threshold signing coordination. Instead of leaking signing activity to public relays:
+
+```text
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Keep #1    │     │   Wisp      │     │  Keep #2    │
+│  (signer)   │◄───►│  (relay)    │◄───►│  (signer)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+                          ▲
+                          │
+                    ┌─────────────┐
+                    │ Coordinator │
+                    │    (CLI)    │
+                    └─────────────┘
+```
+
+- DKG ceremony events stay local
+- Signing coordination never hits public relays
+- 21-day TTL auto-purges ceremony artifacts
+
+### Family/Small Group Relay
+
+5-10 connections is perfect for a household or small community running their own infrastructure without a VPS.
+
+### Mesh Networking Node
+
+Unlike stateless mesh relays, Wisp provides ephemeral-but-persistent storage—nodes can query recent history while data still auto-expires.
+
+## Specs
+
+| Resource | Value |
+|----------|-------|
+| Connections | 5-10 concurrent WebSocket |
+| Storage | 5,000 events |
+| TTL | 21 days |
+| Crypto | Schnorr via libnostr-c/noscrypt |
 
 **Supported NIPs:**
 - NIP-01 (protocol)
+- NIP-09 (deletion)
 - NIP-11 (relay info)
 - NIP-40 (expiration)
 
@@ -59,16 +101,28 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ## Hardware
 
-- ESP32-S3 with 8MB Flash, 8MB PSRAM
-- Tested on ESP32-S3-DevKitC-1-N8R8
+- ESP32-S3 with 8MB Flash
+- PSRAM optional (5000 event index with PSRAM, 1000 without)
+- Tested on M5Stack CoreS3 Lite, ESP32-S3-DevKitC-1-N8R8
+- AtomS3 Lite works but has limited PSRAM (reduced index capacity)
 
 ## Testing
 
 ### Hardware tests (requires device)
 
+Requires: `nak`, `websocat`, `curl`, `jq`
+
 ```bash
-pip install websockets
-RELAY_URL=ws://<relay-ip>:4869 python test/hardware/test_relay.py
+# Install tools
+go install github.com/fiatjaf/nak@latest  # or build from source
+cargo install websocat
+sudo apt install curl jq  # or brew install
+
+# Run integration tests
+RELAY=ws://<relay-ip>:4869 ./test/hardware/integration_test.sh
+
+# Run stress tests
+RELAY=ws://<relay-ip>:4869 ./test/hardware/stress_test.sh all
 ```
 
 ### Native tests (no device)

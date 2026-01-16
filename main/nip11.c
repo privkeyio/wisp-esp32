@@ -3,7 +3,7 @@
 
 static const char *NIP11_JSON =
 "{"
-  "\"name\":\"ESP32 Ephemeral Relay\","
+  "\"name\":\"wisp-esp32\","
   "\"description\":\"Minimal Nostr relay with 21-day TTL\","
   "\"pubkey\":\"\","
   "\"contact\":\"\","

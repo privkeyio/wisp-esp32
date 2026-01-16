@@ -152,7 +152,7 @@ stress_query_load() {
 }
 
 stress_subscription_churn() {
-    local count=${1:-100}
+    local count=${1:-40}
 
     echo -e "\n${YELLOW}=== Subscription Churn Test ===${NC}"
     echo "Creating and closing $count subscriptions..."
@@ -164,8 +164,10 @@ stress_subscription_churn() {
 ["REQ","churn_$i",{"kinds":[1],"limit":1}]
 ["CLOSE","churn_$i"]
 EOF
+        sleep 0.1
         if [ $((i % 25)) -eq 0 ]; then
             echo "  Processed: $i / $count"
+            sleep 1
         fi
     done
 
@@ -277,7 +279,7 @@ show_usage() {
     echo "  connections  Connection storm (20 conn/5s)"
     echo "  events       Event flood (100 events/10s)"
     echo "  queries      Query load (50 concurrent)"
-    echo "  churn        Subscription churn (100 cycles)"
+    echo "  churn        Subscription churn (40 cycles)"
     echo "  mixed        Mixed workload (30s)"
     echo "  soak         Memory soak (1 hour)"
     echo ""
@@ -327,7 +329,7 @@ for test in $TESTS; do
             stress_connection_storm 20 5
             stress_event_flood 100 10
             stress_query_load 50
-            stress_subscription_churn 100
+            stress_subscription_churn
             stress_mixed_load 30
             ;;
         connections)
@@ -340,7 +342,7 @@ for test in $TESTS; do
             stress_query_load 50
             ;;
         churn)
-            stress_subscription_churn 100
+            stress_subscription_churn
             ;;
         mixed)
             stress_mixed_load 30

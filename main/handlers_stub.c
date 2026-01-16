@@ -1,3 +1,6 @@
+#include <stdlib.h>
+#include <string.h>
+
 #include "broadcaster.h"
 #include "deletion.h"
 #include "relay_core.h"
@@ -65,17 +68,17 @@ void handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req)
     }
 
     if (ctx->storage) {
-        uint8_t sent_ids[100][32];
+        #define MAX_SENT_IDS 64
+        uint8_t (*sent_ids)[32] = malloc(MAX_SENT_IDS * sizeof(*sent_ids));
         uint16_t sent_count = 0;
+        if (sent_ids == NULL) {
+            ESP_LOGW(TAG, "Failed to allocate sent_ids, dedup disabled");
+        }
 
         for (size_t i = 0; i < req->filter_count; i++) {
-            if (req->filters[i].limit == 0) {
-                continue;
-            }
-
             nostr_event **events = NULL;
             uint16_t event_count = 0;
-            uint16_t limit = req->filters[i].limit;
+            uint16_t limit = req->filters[i].limit > 0 ? req->filters[i].limit : 100;
 
             storage_error_t query_result = storage_query_events(ctx->storage,
                                                                  &req->filters[i],
@@ -85,21 +88,26 @@ void handle_req(relay_ctx_t *ctx, int conn_fd, router_req_t *req)
             if (query_result == STORAGE_OK && events) {
                 for (uint16_t e = 0; e < event_count; e++) {
                     bool duplicate = false;
-                    for (uint16_t s = 0; s < sent_count; s++) {
-                        if (memcmp(sent_ids[s], events[e]->id, 32) == 0) {
-                            duplicate = true;
-                            break;
+                    if (sent_ids) {
+                        for (uint16_t s = 0; s < sent_count; s++) {
+                            if (memcmp(sent_ids[s], events[e]->id, 32) == 0) {
+                                duplicate = true;
+                                break;
+                            }
                         }
                     }
                     if (!duplicate) {
                         router_send_event(ctx, conn_fd, req->sub_id, events[e]);
-                        if (sent_count < 100) {
+                        if (sent_ids && sent_count < MAX_SENT_IDS) {
                             memcpy(sent_ids[sent_count++], events[e]->id, 32);
                         }
                     }
                 }
                 storage_free_query_results(events, event_count);
             }
+        }
+        if (sent_ids) {
+            free(sent_ids);
         }
     }
 

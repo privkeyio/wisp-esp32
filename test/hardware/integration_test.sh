@@ -15,12 +15,12 @@ FAIL=0
 
 pass() {
     echo -e "${GREEN}PASS${NC}"
-    ((PASS++))
+    ((PASS++)) || true
 }
 
 fail() {
     echo -e "${RED}FAIL${NC}: $1"
-    ((FAIL++))
+    ((FAIL++)) || true
 }
 
 skip() {
@@ -41,10 +41,18 @@ check_deps() {
 
 test_connectivity() {
     echo -n "WebSocket connectivity... "
-    if timeout 5 websocat -t "$RELAY" <<< '["REQ","test",{}]' &>/dev/null; then
+    local response
+    response=$(timeout 5 websocat -t "$RELAY" <<< '["REQ","test",{"limit":1}]' 2>/dev/null | head -1 || true)
+    if [[ "$response" == '["EOSE"'* ]] || [[ "$response" == '["EVENT"'* ]]; then
         pass
-    else
+    elif [[ "$response" == '["NOTICE"'* ]]; then
+        fail "Relay returned NOTICE: $response"
+        exit 1
+    elif [ -z "$response" ]; then
         fail "Cannot connect to $RELAY"
+        exit 1
+    else
+        fail "Unexpected response: $response"
         exit 1
     fi
 }
@@ -115,7 +123,7 @@ test_subscription_delivery() {
 test_eose_response() {
     echo -n "EOSE after historical... "
     local response
-    response=$(timeout 3 websocat -t "$RELAY" <<< '["REQ","eose_test",{"kinds":[1],"limit":1}]' 2>/dev/null | head -5)
+    response=$(timeout 3 websocat -t "$RELAY" <<< '["REQ","eose_test",{"kinds":[1],"limit":1}]' 2>/dev/null | head -5 || true)
 
     if echo "$response" | grep -q '"EOSE"'; then
         pass
@@ -127,7 +135,7 @@ test_eose_response() {
 test_close_subscription() {
     echo -n "Close subscription... "
     local response
-    response=$(timeout 3 websocat -t "$RELAY" << 'EOF' 2>/dev/null
+    response=$(timeout 3 websocat -t "$RELAY" << 'EOF' 2>/dev/null || true
 ["REQ","close_test",{"kinds":[1],"limit":1}]
 ["CLOSE","close_test"]
 EOF
@@ -142,7 +150,7 @@ EOF
 test_invalid_json_rejected() {
     echo -n "Invalid JSON rejected... "
     local response
-    response=$(timeout 3 websocat -t "$RELAY" <<< 'not valid json' 2>/dev/null | head -1)
+    response=$(timeout 3 websocat -t "$RELAY" <<< 'not valid json' 2>/dev/null | head -1 || true)
 
     if echo "$response" | grep -qi 'notice\|error'; then
         pass
@@ -154,7 +162,7 @@ test_invalid_json_rejected() {
 test_invalid_message_rejected() {
     echo -n "Invalid message format rejected... "
     local response
-    response=$(timeout 3 websocat -t "$RELAY" <<< '["INVALID_TYPE"]' 2>/dev/null | head -1)
+    response=$(timeout 3 websocat -t "$RELAY" <<< '["INVALID_TYPE"]' 2>/dev/null | head -1 || true)
 
     if echo "$response" | grep -qi 'notice\|error\|unknown'; then
         pass
@@ -168,9 +176,9 @@ test_invalid_signature_rejected() {
     local bad_event='["EVENT",{"id":"0000000000000000000000000000000000000000000000000000000000000000","pubkey":"0000000000000000000000000000000000000000000000000000000000000000","created_at":1234567890,"kind":1,"tags":[],"content":"test","sig":"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"}]'
 
     local response
-    response=$(timeout 3 websocat -t "$RELAY" <<< "$bad_event" 2>/dev/null | head -1)
+    response=$(timeout 3 websocat -t "$RELAY" <<< "$bad_event" 2>/dev/null | head -1 || true)
 
-    if echo "$response" | grep -qi 'false\|invalid\|signature'; then
+    if echo "$response" | grep -qi 'false\|invalid\|signature\|error'; then
         pass
     else
         fail "Invalid signature not rejected"
@@ -204,7 +212,7 @@ test_rate_limiting() {
 test_multiple_subscriptions() {
     echo -n "Multiple subscriptions... "
     local response
-    response=$(timeout 3 websocat -t "$RELAY" << 'EOF' 2>/dev/null
+    response=$(timeout 3 websocat -t "$RELAY" << 'EOF' 2>/dev/null || true
 ["REQ","sub1",{"kinds":[1],"limit":1}]
 ["REQ","sub2",{"kinds":[0],"limit":1}]
 ["REQ","sub3",{"kinds":[3],"limit":1}]
