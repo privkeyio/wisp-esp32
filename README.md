@@ -138,4 +138,4 @@ cmake .. && make
 
 ## License
 
-AGPL-3.0
+MIT
