@@ -24,7 +24,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: privkeyio/libnostr-c
-          ref: v0.1.5
+          # pinned by commit: empty filter lists match nothing, tag arrays are aligned and -O2 builds compile from here on
+          ref: bcd23746b74d63eccbc1513f7d0c0fd376fa1d3e
           path: libnostr-c
 
       - uses: actions/checkout@v4
