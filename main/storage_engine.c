@@ -387,6 +387,12 @@ static nostr_event *load_event_from_file(const char *path)
 static bool index_matches_filter(const storage_index_entry_t *entry,
                                  const nostr_filter_t *filter)
 {
+    if (filter->e_tags && filter->e_tags_count == 0) return false;
+    if (filter->p_tags && filter->p_tags_count == 0) return false;
+    for (size_t t = 0; filter->generic_tags && t < filter->generic_tags_count; t++) {
+        if (filter->generic_tags[t].values && filter->generic_tags[t].values_count == 0) return false;
+    }
+
     if (filter->since > 0 && entry->created_at < (uint32_t)filter->since) return false;
     if (filter->until > 0 && entry->created_at > (uint32_t)filter->until) return false;
 
