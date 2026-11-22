@@ -7,8 +7,8 @@ static const char *TAG = "sub_mgr";
 
 static char **copy_string_array(char **src, size_t count)
 {
-    if (!src || count == 0) return NULL;
-    char **dst = malloc(sizeof(char *) * count);
+    if (!src) return NULL;
+    char **dst = malloc(sizeof(char *) * (count ? count : 1));
     if (!dst) return NULL;
     for (size_t i = 0; i < count; i++) {
         dst[i] = strdup(src[i]);
@@ -23,8 +23,8 @@ static char **copy_string_array(char **src, size_t count)
 
 static int32_t *copy_int_array(int32_t *src, size_t count)
 {
-    if (!src || count == 0) return NULL;
-    int32_t *dst = malloc(sizeof(int32_t) * count);
+    if (!src) return NULL;
+    int32_t *dst = malloc(sizeof(int32_t) * (count ? count : 1));
     if (!dst) return NULL;
     memcpy(dst, src, sizeof(int32_t) * count);
     return dst;
@@ -32,14 +32,14 @@ static int32_t *copy_int_array(int32_t *src, size_t count)
 
 static nostr_generic_tag_filter_t *copy_generic_tags(nostr_generic_tag_filter_t *src, size_t count)
 {
-    if (!src || count == 0) return NULL;
-    nostr_generic_tag_filter_t *dst = calloc(count, sizeof(nostr_generic_tag_filter_t));
+    if (!src) return NULL;
+    nostr_generic_tag_filter_t *dst = calloc(count ? count : 1, sizeof(nostr_generic_tag_filter_t));
     if (!dst) return NULL;
     for (size_t i = 0; i < count; i++) {
         dst[i].tag_name = src[i].tag_name;
         dst[i].values_count = src[i].values_count;
         dst[i].values = copy_string_array(src[i].values, src[i].values_count);
-        if (src[i].values_count > 0 && !dst[i].values) {
+        if (src[i].values && !dst[i].values) {
             for (size_t j = 0; j < i; j++) {
                 for (size_t k = 0; k < dst[j].values_count; k++) free(dst[j].values[k]);
                 free(dst[j].values);
@@ -57,27 +57,27 @@ static bool filter_copy(nostr_filter_t *dst, const nostr_filter_t *src)
 
     dst->ids_count = src->ids_count;
     dst->ids = copy_string_array(src->ids, src->ids_count);
-    if (src->ids_count > 0 && !dst->ids) goto fail;
+    if (src->ids && !dst->ids) goto fail;
 
     dst->authors_count = src->authors_count;
     dst->authors = copy_string_array(src->authors, src->authors_count);
-    if (src->authors_count > 0 && !dst->authors) goto fail;
+    if (src->authors && !dst->authors) goto fail;
 
     dst->kinds_count = src->kinds_count;
     dst->kinds = copy_int_array(src->kinds, src->kinds_count);
-    if (src->kinds_count > 0 && !dst->kinds) goto fail;
+    if (src->kinds && !dst->kinds) goto fail;
 
     dst->e_tags_count = src->e_tags_count;
     dst->e_tags = copy_string_array(src->e_tags, src->e_tags_count);
-    if (src->e_tags_count > 0 && !dst->e_tags) goto fail;
+    if (src->e_tags && !dst->e_tags) goto fail;
 
     dst->p_tags_count = src->p_tags_count;
     dst->p_tags = copy_string_array(src->p_tags, src->p_tags_count);
-    if (src->p_tags_count > 0 && !dst->p_tags) goto fail;
+    if (src->p_tags && !dst->p_tags) goto fail;
 
     dst->generic_tags_count = src->generic_tags_count;
     dst->generic_tags = copy_generic_tags(src->generic_tags, src->generic_tags_count);
-    if (src->generic_tags_count > 0 && !dst->generic_tags) goto fail;
+    if (src->generic_tags && !dst->generic_tags) goto fail;
 
     dst->since = src->since;
     dst->until = src->until;

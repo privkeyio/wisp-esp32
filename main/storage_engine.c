@@ -390,7 +390,7 @@ static bool index_matches_filter(const storage_index_entry_t *entry,
     if (filter->since > 0 && entry->created_at < (uint32_t)filter->since) return false;
     if (filter->until > 0 && entry->created_at > (uint32_t)filter->until) return false;
 
-    if (filter->kinds_count > 0) {
+    if (filter->kinds) {
         bool found = false;
         for (size_t k = 0; k < filter->kinds_count; k++) {
             if (filter->kinds[k] == entry->kind) {
@@ -401,7 +401,7 @@ static bool index_matches_filter(const storage_index_entry_t *entry,
         if (!found) return false;
     }
 
-    if (filter->ids_count > 0) {
+    if (filter->ids) {
         bool found = false;
         for (size_t k = 0; k < filter->ids_count; k++) {
             uint8_t id_bytes[32];
@@ -415,7 +415,7 @@ static bool index_matches_filter(const storage_index_entry_t *entry,
         if (!found) return false;
     }
 
-    if (filter->authors_count > 0) {
+    if (filter->authors) {
         bool found = false;
         for (size_t k = 0; k < filter->authors_count; k++) {
             size_t prefix_len = strlen(filter->authors[k]);
