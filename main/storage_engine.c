@@ -405,7 +405,8 @@ static bool index_matches_filter(const storage_index_entry_t *entry,
         bool found = false;
         for (size_t k = 0; k < filter->ids_count; k++) {
             uint8_t id_bytes[32];
-            if (nostr_hex_to_bytes(filter->ids[k], 64, id_bytes, 32) == NOSTR_RELAY_OK) {
+            if (strlen(filter->ids[k]) == 64 &&
+                nostr_hex_to_bytes(filter->ids[k], 64, id_bytes, 32) == NOSTR_RELAY_OK) {
                 if (memcmp(id_bytes, entry->event_id, 32) == 0) {
                     found = true;
                     break;

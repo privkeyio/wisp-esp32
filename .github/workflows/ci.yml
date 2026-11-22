@@ -24,7 +24,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: privkeyio/libnostr-c
-          ref: v0.1.5
+          # pinned by commit: empty filter lists match nothing from here on
+          ref: 1b7873666143994b1f75f910fdb0ce35c3853325
           path: libnostr-c
 
       - uses: actions/checkout@v4
